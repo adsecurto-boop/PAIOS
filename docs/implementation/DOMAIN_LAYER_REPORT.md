@@ -174,7 +174,7 @@ and raises `InvalidTransitionError`.
 ```
 Recommended → Scheduled
 Scheduled   → Ready | Skipped | Cancelled | Overtaken
-Ready       → Started
+Ready       → Started | Skipped | Cancelled | Overtaken   (ADR-003)
 Started     → Paused | Interrupted | Completed
 Paused      → Resumed | Cancelled
 Resumed     → Started | Completed
@@ -190,7 +190,9 @@ Notable consequences, all doc-mandated: `Recommended → Started` impossible
 (a Recommendation is not execution); `Scheduled → Completed` impossible (a
 plan is not proof of action); Completed history cannot reopen; **Overtaken
 does not archive** — BUSINESS_RULES.md permits Archived only from Completed,
-Skipped, and Cancelled.
+Skipped, and Cancelled. Per **ADR-003**, Ready shares every non-start exit
+of Scheduled — a Ready Event is a Scheduled Event whose planned time has
+arrived, and readiness never removes the user's freedom not to start.
 
 ### Context Window Lifecycle (§3)
 

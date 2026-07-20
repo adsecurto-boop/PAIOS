@@ -519,8 +519,8 @@ An Event no longer moves in a single step from suggestion to completion. It prog
 - **Paused** — A Started Event has been temporarily halted, by the user's own choice, without external interruption.
 - **Resumed** — A Paused or Interrupted Event has continued from where it left off.
 - **Completed** — The Event finished as intended and becomes part of immutable History.
-- **Skipped** — A Scheduled Event was never started, and its Context Window passed without action.
-- **Cancelled** — A Scheduled, Paused, or Interrupted Event was deliberately abandoned before completion.
+- **Skipped** — A Scheduled or Ready Event was never started, and its Context Window passed without action.
+- **Cancelled** — A Scheduled, Ready, Paused, or Interrupted Event was deliberately abandoned before completion.
 - **Interrupted** — The current Event was temporarily paused, not by the user's own choice but because an Event Disturber forced a Scheduler recalculation. An Interrupted Event may later Resume, be Cancelled, or be Overtaken.
 - **Overtaken** — A higher-priority Event, produced by a new Recommendation and Scheduler recalculation, has replaced the current Event before it could resume. This differs from Cancelled: the Event isn't rejected, it simply lost priority to something more urgent.
 - **Archived** — A Completed, Skipped, or Cancelled Event has aged out of active reporting but remains permanently in History.
@@ -534,13 +534,17 @@ Interrupted and Overtaken are worth holding apart deliberately: **Interrupted** 
 Events transition between the lifecycle states above according to a small set of well-defined paths. Representative examples:
 
 ```
-Scheduled    → Started
+Scheduled    → Ready
+Ready        → Started
 Started      → Completed
 Started      → Interrupted
 Interrupted  → Resumed
 Interrupted  → Cancelled
 Scheduled    → Skipped
+Ready        → Skipped
+Ready        → Cancelled
 Scheduled    → Overtaken
+Ready        → Overtaken
 ```
 
 The Scheduler controls these transitions — an Event does not change its own state; the Scheduler changes it in response to the user, the clock, or an Event Disturber.

@@ -32,8 +32,8 @@ Event state answers: **“What lifecycle phase is this Event in?”** It does no
 | `Paused` | User temporarily paused the Event. |
 | `Resumed` | A Paused or Interrupted Event continues. |
 | `Completed` | Execution ended; immutable historical Event. |
-| `Skipped` | Scheduled opportunity passed without a start. |
-| `Cancelled` | A future, paused, or interrupted Event was deliberately abandoned. |
+| `Skipped` | A Scheduled or Ready opportunity passed without a start. |
+| `Cancelled` | A future (Scheduled or Ready), paused, or interrupted Event was deliberately abandoned. |
 | `Interrupted` | External reality temporarily stopped execution. |
 | `Overtaken` | A Principle-constrained higher-priority Event replaced it. |
 | `Archived` | Terminal History is outside active reporting. |
@@ -51,10 +51,13 @@ stateDiagram-v2
     Resumed --> Started: execution continues
     Started --> Completed: completion confirmed
     Scheduled --> Skipped: opportunity passes
+    Ready --> Skipped: opportunity passes unstarted
     Scheduled --> Cancelled: deliberate abandonment
+    Ready --> Cancelled: deliberate abandonment
     Paused --> Cancelled: deliberate abandonment
     Interrupted --> Cancelled: continuation abandoned
     Scheduled --> Overtaken: higher priority replaces plan
+    Ready --> Overtaken: higher priority replaces plan
     Interrupted --> Overtaken: higher priority replaces continuation
     Completed --> Archived
     Skipped --> Archived
@@ -73,11 +76,18 @@ stateDiagram-v2
 | `Interrupted` | `Resumed` | Recalculation permits continuation | Scheduler | Valid continuation exists | `EventResumed` |
 | `Resumed` | `Started` | Execution continues | Scheduler | User continues action | `EventStarted` |
 | `Started` or `Resumed` | `Completed` | Completion confirmed | Scheduler | Actual execution occurred | `EventCompleted` |
-| `Scheduled` | `Skipped` | Opportunity passes | Scheduler | No start occurred before window ended | `EventSkipped` |
-| `Scheduled`, `Paused`, or `Interrupted` | `Cancelled` | Deliberate abandonment | Scheduler | Authorized cancellation | `EventCancelled` |
+| `Scheduled` or `Ready` | `Skipped` | Opportunity passes | Scheduler | No start occurred before window ended | `EventSkipped` |
+| `Scheduled`, `Ready`, `Paused`, or `Interrupted` | `Cancelled` | Deliberate abandonment | Scheduler | Authorized cancellation | `EventCancelled` |
 | `Started` | `Interrupted` | Disturber causes Context transition | Scheduler | Material Context change is recorded | `EventInterrupted` |
-| `Scheduled` or `Interrupted` | `Overtaken` | Higher-priority replacement | Scheduler | Replacement respects Principles | `EventOvertaken` |
+| `Scheduled`, `Ready`, or `Interrupted` | `Overtaken` | Higher-priority replacement | Scheduler | Replacement respects Principles | `EventOvertaken` |
 | `Completed`, `Skipped`, or `Cancelled` | `Archived` | Archival condition | Scheduler | Terminal state | `EventArchived` |
+
+**Revision note (ADR-003):** `Ready` shares every non-start exit of
+`Scheduled` (`Skipped`, `Cancelled`, `Overtaken`). Ready is a Scheduled
+Event whose planned time has arrived; readiness must not remove the user's
+freedom not to start, nor trap the Event when its opportunity passes. This
+resolves the Ready-state dead-end discovered during Scheduler
+implementation.
 
 ## Invalid transitions
 

@@ -37,7 +37,16 @@ EVENT_STATE_MACHINE: StateMachine[EventStatus] = StateMachine(
                 EventStatus.OVERTAKEN,
             }
         ),
-        EventStatus.READY: frozenset({EventStatus.STARTED}),
+        # ADR-003: Ready shares every non-start exit of Scheduled — a Ready
+        # Event is a Scheduled Event whose planned time has arrived.
+        EventStatus.READY: frozenset(
+            {
+                EventStatus.STARTED,
+                EventStatus.SKIPPED,
+                EventStatus.CANCELLED,
+                EventStatus.OVERTAKEN,
+            }
+        ),
         EventStatus.STARTED: frozenset(
             {
                 EventStatus.PAUSED,

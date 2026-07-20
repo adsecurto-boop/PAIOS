@@ -132,6 +132,30 @@ class TestEventLifecycle:
             advance(event, EventStatus.SCHEDULED, target)
             assert event.status is target
 
+    def test_ready_shares_scheduled_non_start_exits(self, make_event):
+        """ADR-003: Ready -> Skipped / Cancelled / Overtaken are legal."""
+        for target in (
+            EventStatus.SKIPPED,
+            EventStatus.CANCELLED,
+            EventStatus.OVERTAKEN,
+        ):
+            event = make_event(f"evt_ready_{target.value}")
+            advance(
+                event, EventStatus.SCHEDULED, EventStatus.READY, target
+            )
+            assert event.status is target
+
+    def test_ready_skipped_event_archives(self, make_event):
+        event = make_event()
+        advance(
+            event,
+            EventStatus.SCHEDULED,
+            EventStatus.READY,
+            EventStatus.SKIPPED,
+            EventStatus.ARCHIVED,
+        )
+        assert event.status is EventStatus.ARCHIVED
+
     def test_running_is_started_or_resumed_only(self, make_event):
         event = make_event()
         assert not event.is_running

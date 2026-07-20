@@ -26,7 +26,7 @@ The final Event Lifecycle state. A Completed, Skipped, or Cancelled Event that h
 A future document, not yet written, that will define **HOW** the entities in this Domain Model behave over time — ticks, triggers, timing, and runtime mechanics. Sits between the Domain Model and Application Services in the implementation order: Domain Model → Behavioral Architecture → Application Services → Infrastructure.
 
 **Cancelled (Event state)**
-An Event Lifecycle state indicating a Scheduled, Paused, or Interrupted Event was deliberately abandoned before completion.
+An Event Lifecycle state indicating a Scheduled, Ready, Paused, or Interrupted Event was deliberately abandoned before completion.
 
 **Changing (Context Window state)**
 A Context Window state indicating the window is in the process of transitioning — typically triggered by an Event Disturber — before settling into Expired or a new Active window taking over.
@@ -182,7 +182,7 @@ An Event the Scheduler has planned for the future but which has not yet been per
 The component that plans future Events, replacing the earlier Timeline concept. Begins from the current moment, respects Principles/Resources/time/Recommendations, generates Scheduled Events, and controls all Event State Transitions. As of v0.4, continuously compares Current Clock, Current Context Window, Running Event, Next Scheduled Event, and Available Resources, recalculating on sufficient deviation. Never edits History.
 
 **Skipped (Event state)**
-An Event Lifecycle state indicating a Scheduled Event was never started, and its Context Window passed without action.
+An Event Lifecycle state indicating a Scheduled or Ready Event was never started, and its Context Window passed without action.
 
 **Started (Event state)**
 An Event Lifecycle state indicating the user has begun performing the Event.

@@ -39,7 +39,8 @@ As of v0.4, three distinct categories of rule are represented here, and they are
 - Transitions are recorded, never rewritten. History remains immutable — only new transition records are added.
 - Interrupted means the current Event was paused by an external cause (an Event Disturber), not by the user's own choice.
 - Overtaken means a higher-priority Event replaced the current one before it could resume; the original Event does not automatically return to Started.
-- Valid example transitions include: Scheduled → Started; Started → Completed; Started → Interrupted; Interrupted → Resumed; Interrupted → Cancelled; Scheduled → Skipped; Scheduled → Overtaken.
+- Valid example transitions include: Scheduled → Ready; Ready → Started; Started → Completed; Started → Interrupted; Interrupted → Resumed; Interrupted → Cancelled; Scheduled → Skipped; Ready → Skipped; Ready → Cancelled; Scheduled → Overtaken; Ready → Overtaken.
+- Ready shares every non-start exit of Scheduled (Skipped, Cancelled, Overtaken) — a Ready Event is a Scheduled Event whose planned time has arrived, and readiness never removes the user's freedom not to start (ADR-003).
 - Completed, Skipped, and Cancelled Events may later transition to Archived, but never back to an earlier active state.
 
 ## Context Rules
