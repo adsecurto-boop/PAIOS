@@ -38,8 +38,33 @@ from paios.domain.entities.recommendation import Recommendation
 from paios.domain.entities.reflection import Reflection
 from paios.domain.entities.resource import Resource
 from paios.domain.entities.user import User
+from paios.domain.enums import DisturberState, RecommendationStatus
 from paios.domain.value_objects.identifiers import ContextWindowId, EventId
 from paios.runtime.exceptions import RuntimeInvariantError
+
+#: Recommendation states that still matter to scheduling decisions
+#: (BEHAVIORAL_ARCHITECTURE.md section 5, "Current Recommendations" —
+#: active recommendations with acceptance status). Terminal decision
+#: evidence (Rejected/Expired/Consumed) is naturally excluded.
+ACTIVE_RECOMMENDATION_STATES: frozenset[RecommendationStatus] = frozenset(
+    {
+        RecommendationStatus.GENERATED,
+        RecommendationStatus.PENDING,
+        RecommendationStatus.ACCEPTED,
+    }
+)
+
+#: Disturber states whose lifecycle is not yet complete
+#: (BEHAVIORAL_ARCHITECTURE.md section 5, "Current Disturbances" — active
+#: Event Disturbers). Resolved/Archived are complete and excluded.
+ACTIVE_DISTURBER_STATES: frozenset[DisturberState] = frozenset(
+    {
+        DisturberState.DETECTED,
+        DisturberState.RECORDED,
+        DisturberState.ANALYZED,
+        DisturberState.APPLIED,
+    }
+)
 
 
 @unique
@@ -186,6 +211,54 @@ class RuntimeState:
             )
         self.events = self.events + (event,)
         self.context_windows = self.context_windows + (context_window,)
+
+    def admit_recommendation(self, recommendation: Recommendation) -> None:
+        """Admit a newly produced Recommendation into Runtime State
+        (approved Milestone 6 correction; BEHAVIORAL_ARCHITECTURE.md §5
+        'Current Recommendations', §2 'Update Runtime State ->
+        Update Recommendations'). Append-only; duplicates rejected."""
+        if any(
+            existing.recommendation_id == recommendation.recommendation_id
+            for existing in self.recommendations
+        ):
+            raise RuntimeInvariantError(
+                f"Recommendation {recommendation.recommendation_id} is "
+                "already admitted"
+            )
+        self.recommendations = self.recommendations + (recommendation,)
+
+    def admit_event_disturber(self, disturber: EventDisturber) -> None:
+        """Admit a newly reported Event Disturber into Runtime State
+        (approved Milestone 6 correction; BEHAVIORAL_ARCHITECTURE.md §5
+        'Current Disturbances'). Append-only; duplicates rejected."""
+        if any(
+            existing.event_disturber_id == disturber.event_disturber_id
+            for existing in self.event_disturbers
+        ):
+            raise RuntimeInvariantError(
+                f"Event Disturber {disturber.event_disturber_id} is "
+                "already admitted"
+            )
+        self.event_disturbers = self.event_disturbers + (disturber,)
+
+    @property
+    def active_recommendations(self) -> tuple[Recommendation, ...]:
+        """Only Recommendations that still matter to scheduling —
+        completed lifecycle objects are naturally excluded."""
+        return tuple(
+            recommendation
+            for recommendation in self.recommendations
+            if recommendation.status in ACTIVE_RECOMMENDATION_STATES
+        )
+
+    @property
+    def active_event_disturbers(self) -> tuple[EventDisturber, ...]:
+        """Only Event Disturbers whose lifecycle is not yet complete."""
+        return tuple(
+            disturber
+            for disturber in self.event_disturbers
+            if disturber.state in ACTIVE_DISTURBER_STATES
+        )
 
     def aggregate_counts(self) -> dict[str, int]:
         return {

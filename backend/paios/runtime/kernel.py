@@ -371,6 +371,39 @@ class RuntimeKernel:
         )
         self._refresh_snapshot()
 
+    def admit_recommendation(self, recommendation) -> None:
+        """Admit a newly produced Recommendation (approved M6 correction).
+
+        Event-driven and append-only: admission broadcasts the existing
+        RecommendationGenerated vocabulary with the persistence-convention
+        payload (PersistenceSync saves it; the RecalculationBridge forwards
+        it to the Scheduler), then refreshes the snapshot."""
+        self._require(KernelState.RUNNING)
+        self._state.admit_recommendation(recommendation)
+        self._publish(
+            SystemEventType.RECOMMENDATION_GENERATED,
+            {"recommendation": recommendation, "operation": "save"},
+        )
+        self._refresh_snapshot()
+
+    def admit_event_disturber(self, disturber) -> None:
+        """Admit a newly reported Event Disturber (approved M6 correction).
+
+        Broadcasts the existing DisturbanceDetected vocabulary with the
+        persistence-convention payload; the bridge forwards it so the
+        Scheduler runs the mandatory disturbance chain."""
+        self._require(KernelState.RUNNING)
+        self._state.admit_event_disturber(disturber)
+        self._publish(
+            SystemEventType.DISTURBANCE_DETECTED,
+            {
+                "event_disturber": disturber,
+                "event_disturber_id": str(disturber.event_disturber_id),
+                "operation": "save",
+            },
+        )
+        self._refresh_snapshot()
+
     def activate_context_window(
         self, window_id, at, reason: str | None = None
     ) -> None:
