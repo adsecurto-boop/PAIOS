@@ -4,7 +4,9 @@ This report documents the implemented PAIOS Domain Layer so that a new
 developer can understand it entirely without reading the code.
 
 Status: Milestone 1 complete, architecture-audited (2 violations found and
-corrected during audit), 118 unit tests passing.
+corrected during audit), 135 unit tests passing (118 original + 17 covering
+the approved Milestone 2 reconstitution amendment — see "Reconstitution
+Amendment" below).
 
 Technology: Python 3.12, standard library only (`dataclasses`, `enum`,
 `typing`, `datetime`, `uuid`, `types`). No frameworks, no I/O, no
@@ -325,6 +327,33 @@ Each aggregate starts at its documented initial state (Event: Recommended;
 ContextWindow: Created; Recommendation: Generated; Disturber: Detected) with
 an empty record list, and exposes `status`/`state`/`current_state` plus a
 `transitions` tuple.
+
+### Reconstitution Amendment (approved during Milestone 2 review)
+
+History is immutable evidence: loading persisted aggregates must restore
+evidence, never re-execute lifecycle commands. To support this, one
+additive surface was approved onto the frozen baseline — no existing
+method or guard was modified:
+
+- **`TransitionHistory.from_records(machine, initial_state, records)`** —
+  reconstitutes an append-only history from persisted evidence after
+  **structural validation**: every record must be a legal state-machine
+  edge and the chain must be continuous. Command preconditions are NOT
+  re-adjudicated — Policies judge the future, never the past.
+- **`restore(...)` classmethods** on the four lifecycle aggregates
+  (`Event`, `ContextWindow`, `Recommendation`, `EventDisturber`) — DDD
+  reconstitution factories that build the entity from its facts, attach
+  the validated history while the instance is still factory-private, and
+  apply **evidence-shape rules** in place of command preconditions: an
+  Outcome requires a history through Completed/Cancelled/Overtaken; a
+  Reflection link requires Completed/Archived; an Applied Disturber
+  requires its resulting Context Window reference; Resolved evidence must
+  agree with the resolution status.
+
+Every immutability guard is armed on reconstituted aggregates (fact
+freezing, write-once evidence, history non-replacement), and new
+transitions/commands behave identically afterward — including full Policy
+enforcement on new commands. Covered by `tests/domain/test_reconstitution.py`.
 
 ---
 

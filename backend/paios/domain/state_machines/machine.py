@@ -9,7 +9,7 @@ Window, Recommendation, and Event Disturber.
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Generic, Mapping, TypeVar
+from typing import Generic, Iterable, Mapping, TypeVar
 
 from paios.domain.errors import InvalidTransitionError
 
@@ -110,3 +110,37 @@ class TransitionHistory(Generic[S]):
         )
         self._records.append(record)
         return record
+
+    @classmethod
+    def from_records(
+        cls,
+        machine: StateMachine[S],
+        initial_state: S,
+        records: Iterable[TransitionRecord[S]],
+    ) -> "TransitionHistory[S]":
+        """Reconstitute a history from persisted evidence (hydration).
+
+        History is immutable evidence: transitions that already happened are
+        restored, never re-executed. Validation here is purely STRUCTURAL —
+        every record must be a legal edge of the state machine and the chain
+        must be continuous (first from_state is the initial state; each
+        to_state is the next record's from_state). Command preconditions are
+        NOT re-adjudicated: Policies judge the future, never the past
+        (BUSINESS_RULES.md — Domain Policies evolve; History does not).
+
+        The result is an ordinary append-only history: order is preserved
+        and new transitions may still be applied after reconstitution.
+        """
+        history = cls(machine, initial_state)
+        expected = initial_state
+        for record in records:
+            if record.from_state is not expected:
+                raise InvalidTransitionError(
+                    f"{machine.name}: evidence chain broken — record claims "
+                    f"from_state {record.from_state.value!r} but the prior "
+                    f"state is {expected.value!r}"
+                )
+            machine.validate(record.from_state, record.to_state)
+            history._records.append(record)
+            expected = record.to_state
+        return history

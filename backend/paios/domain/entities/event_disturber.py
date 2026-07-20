@@ -70,6 +70,66 @@ class EventDisturber(Entity):
             )
         super().__setattr__(name, value)
 
+    @classmethod
+    def restore(
+        cls,
+        *,
+        event_disturber_id: EventDisturberId,
+        user_id: UserId,
+        type: DisturberType,
+        description: str,
+        severity: DisturberSeverity,
+        occurred_at: datetime,
+        resulting_context_window_id: ContextWindowId | None = None,
+        affected_scheduled_event_ids: tuple[EventId, ...] = (),
+        resolution_status: DisturberResolutionStatus = (
+            DisturberResolutionStatus.PENDING
+        ),
+        transitions: tuple[TransitionRecord[DisturberState], ...] = (),
+    ) -> "EventDisturber":
+        """Reconstitute an Event Disturber from persisted evidence.
+
+        Evidence-shape rules mirror the causal chain: a history that passed
+        through Applied requires the resulting Context Window reference (the
+        Disturber's impact is a Context Window transition, never a direct
+        Event mutation), and Resolved evidence must agree with the persisted
+        resolution status.
+        """
+        disturber = cls(
+            event_disturber_id=event_disturber_id,
+            user_id=user_id,
+            type=type,
+            description=description,
+            severity=severity,
+            occurred_at=occurred_at,
+            resulting_context_window_id=resulting_context_window_id,
+            affected_scheduled_event_ids=affected_scheduled_event_ids,
+            resolution_status=resolution_status,
+        )
+        history = TransitionHistory.from_records(
+            DISTURBER_STATE_MACHINE, DisturberState.DETECTED, transitions
+        )
+        object.__setattr__(disturber, "_history", history)
+        visited = {record.to_state for record in history.records}
+        if (
+            DisturberState.APPLIED in visited
+            and resulting_context_window_id is None
+        ):
+            raise DomainValidationError(
+                "Applied Event Disturber evidence requires the resulting "
+                "Context Window reference"
+            )
+        resolved_in_history = DisturberState.RESOLVED in visited
+        resolved_status = (
+            resolution_status is DisturberResolutionStatus.RESOLVED
+        )
+        if resolved_in_history != resolved_status:
+            raise DomainValidationError(
+                "Event Disturber resolution status disagrees with its "
+                "transition evidence"
+            )
+        return disturber
+
     @property
     def state(self) -> DisturberState:
         return self._history.current_state

@@ -83,6 +83,44 @@ class ContextWindow(Entity):
         history = self.__dict__.get("_history")
         return history is not None and history.current_state in _IMMUTABLE_STATES
 
+    @classmethod
+    def restore(
+        cls,
+        *,
+        window_id: ContextWindowId,
+        context_id: ContextId,
+        event_id: EventId,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        duration: Duration | None = None,
+        reason_started: str | None = None,
+        reason_ended: str | None = None,
+        transitions: tuple[TransitionRecord[ContextWindowState], ...] = (),
+    ) -> "ContextWindow":
+        """Reconstitute a Context Window from persisted evidence.
+
+        Facts are supplied while the fresh instance is still Created, then
+        the structurally validated history is attached — so a window whose
+        evidence reaches Expired/Archived is fact-frozen from the moment the
+        factory returns ("past Context Windows are immutable"). No lifecycle
+        command is re-executed and no closing fact is re-derived.
+        """
+        window = cls(
+            window_id=window_id,
+            context_id=context_id,
+            event_id=event_id,
+            start_time=start_time,
+            end_time=end_time,
+            duration=duration,
+            reason_started=reason_started,
+            reason_ended=reason_ended,
+        )
+        history = TransitionHistory.from_records(
+            CONTEXT_WINDOW_STATE_MACHINE, ContextWindowState.CREATED, transitions
+        )
+        object.__setattr__(window, "_history", history)
+        return window
+
     @property
     def current_state(self) -> ContextWindowState:
         return self._history.current_state

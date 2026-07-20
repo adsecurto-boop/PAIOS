@@ -71,6 +71,48 @@ class Recommendation(Entity):
             )
         super().__setattr__(name, value)
 
+    @classmethod
+    def restore(
+        cls,
+        *,
+        recommendation_id: RecommendationId,
+        user_id: UserId,
+        reason: str,
+        created_at: datetime,
+        expires_at: datetime,
+        related_project_id: ProjectId | None = None,
+        priority: float | None = None,
+        expected_benefit: str | None = None,
+        suggested_timing: datetime | None = None,
+        confidence_score: float | None = None,
+        transitions: tuple[TransitionRecord[RecommendationStatus], ...] = (),
+    ) -> "Recommendation":
+        """Reconstitute a Recommendation from persisted evidence.
+
+        Historical decisions are restored, not re-adjudicated: the expiry
+        check in ``accept`` is a command precondition (a Domain Policy —
+        Policies evolve), so it is deliberately NOT re-applied to evidence.
+        Rejected and Expired Recommendations always load — they remain
+        immutable decision evidence.
+        """
+        recommendation = cls(
+            recommendation_id=recommendation_id,
+            user_id=user_id,
+            reason=reason,
+            created_at=created_at,
+            expires_at=expires_at,
+            related_project_id=related_project_id,
+            priority=priority,
+            expected_benefit=expected_benefit,
+            suggested_timing=suggested_timing,
+            confidence_score=confidence_score,
+        )
+        history = TransitionHistory.from_records(
+            RECOMMENDATION_STATE_MACHINE, RecommendationStatus.GENERATED, transitions
+        )
+        object.__setattr__(recommendation, "_history", history)
+        return recommendation
+
     @property
     def status(self) -> RecommendationStatus:
         return self._history.current_state

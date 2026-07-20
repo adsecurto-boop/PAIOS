@@ -152,6 +152,83 @@ class Event(Entity):
         history = self.__dict__.get("_history")
         return history is not None and history.current_state in POST_EXECUTION_STATES
 
+    # --- Reconstitution (hydration) --------------------------------------
+
+    @classmethod
+    def restore(
+        cls,
+        *,
+        event_id: EventId,
+        user_id: UserId,
+        context_window_id: ContextWindowId,
+        category: str,
+        description: str,
+        project_id: ProjectId | None = None,
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,
+        duration: Duration | None = None,
+        impact_type: ImpactType | None = None,
+        priority_alignment_score: int | None = None,
+        resource_flow: ResourceFlow | None = None,
+        expected_outcome: str | None = None,
+        actual_outcome: str | None = None,
+        reflection_id: ReflectionId | None = None,
+        transitions: tuple[TransitionRecord[EventStatus], ...] = (),
+        outcome: EventOutcome | None = None,
+    ) -> "Event":
+        """Reconstitute an Event from persisted evidence (DDD reconstitution
+        factory). Loading restores evidence; it never re-executes commands.
+
+        The transition chain is validated structurally by
+        TransitionHistory.from_records. Evidence-shape rules replace command
+        preconditions: an Outcome is admissible only if the history passed
+        THROUGH an outcome-permitting state (Completed/Cancelled/Overtaken —
+        it may since have Archived); a Reflection link only if the history
+        reached Completed or Archived. The history is attached while the
+        instance is still factory-private with an empty fresh history — the
+        public reassignment guard continues to protect every escaped
+        instance, and all fact-freeze guards apply from here on.
+        """
+        event = cls(
+            event_id=event_id,
+            user_id=user_id,
+            context_window_id=context_window_id,
+            category=category,
+            description=description,
+            project_id=project_id,
+            start_time=start_time,
+            end_time=end_time,
+            duration=duration,
+            impact_type=impact_type,
+            priority_alignment_score=priority_alignment_score,
+            resource_flow=(
+                resource_flow if resource_flow is not None else ResourceFlow.empty()
+            ),
+            expected_outcome=expected_outcome,
+            actual_outcome=actual_outcome,
+            reflection_id=reflection_id,
+        )
+        history = TransitionHistory.from_records(
+            EVENT_STATE_MACHINE, EventStatus.RECOMMENDED, transitions
+        )
+        object.__setattr__(event, "_history", history)
+        visited = {record.to_state for record in history.records}
+        if reflection_id is not None and not (
+            visited & {EventStatus.COMPLETED, EventStatus.ARCHIVED}
+        ):
+            raise DomainValidationError(
+                "Reflection evidence requires a history that reached "
+                "Completed or Archived"
+            )
+        if outcome is not None:
+            if not (visited & _OUTCOME_STATES):
+                raise DomainValidationError(
+                    "Outcome evidence requires a history that passed through "
+                    "Completed, Cancelled, or Overtaken"
+                )
+            event._outcome = outcome
+        return event
+
     # --- Lifecycle -------------------------------------------------------
 
     @property
