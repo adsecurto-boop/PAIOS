@@ -1,0 +1,9 @@
+[project]
+name = "paios"
+version = "0.4.0"
+description = "PAIOS - Personal AI Operating System (Domain Layer)"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["backend", "."]
+testpaths = ["tests"]
