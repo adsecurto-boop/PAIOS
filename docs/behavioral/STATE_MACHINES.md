@@ -1,352 +1,257 @@
 # PAIOS Behavioral State Machines
 
-## Document Purpose
+## Purpose and invariants
 
-This document defines the behavioral state machines of the major runtime entities in PAIOS.
+This is the formal behavioral specification for PAIOS state transitions. A transition appends lifecycle evidence; it never rewrites completed Event History.
 
-The Domain Model defines what these entities are. The Behavioral Architecture defines how the runtime observes, reasons, plans, executes, and learns. This document gives that behavior a precise lifecycle shape: which states exist, which changes are meaningful, and which explicit events or conditions may cause a transition.
+- Events are immutable historical truth.
+- Scheduler controls Event transitions and only changes future plans.
+- Decision Engine owns no data and produces Recommendations only.
+- Event Disturbers never modify Events directly: `Disturber → Context Window transition → Scheduler recalculation → Event transition`.
+- Principles constrain every Recommendation and Scheduler decision.
+- No Task entity exists.
 
-This is a behavioral specification. It does not define persistence, APIs, algorithms, or implementation mechanisms.
-
----
-
-## 1. Behavioral Philosophy
-
-PAIOS is not driven by CRUD-style record updates. It is driven by changes in reality.
-
-An entity changes state because something meaningful occurred: time progressed, the user acted, a Context changed, a Recommendation was accepted, an Event Disturber appeared, or a completed Event produced learning. A state machine makes that behavioral meaning explicit.
-
-State machines exist in PAIOS to ensure that:
-
-- Runtime entities move through observable, intentional lifecycles.
-- The system can distinguish a future plan from an action that actually happened.
-- Reality can override planning without rewriting History.
-- Every transition has a named behavioral trigger or condition.
-- Completed history remains immutable.
-
-The central separation remains:
-
-```text
-Recommendation → Scheduler → Scheduled Event → Executing Event → Completed Event
-```
-
-A Recommendation does not become an Event directly. The Scheduler converts accepted planning input into a Scheduled Event. An actual start creates an Executing Event. Completion makes that Event immutable History.
+Each transition table records source, target, trigger, responsible actor, preconditions, and resulting domain event. **Actor** is the authority that applies the transition, even when a user action or clock condition supplies the trigger.
 
 ---
 
-## 2. State Categories
+# 1. Event Lifecycle State Machine
 
-PAIOS state machines fall into four behavioral categories. These categories describe the role an entity plays while the system is running; they do not change ownership or domain relationships.
+## Purpose
 
-### Executable Objects
+Event state answers: **“What lifecycle phase is this Event in?”** It does not answer what result occurred.
 
-Executable Objects represent work that may be planned or performed in reality.
+## States
 
-- **Scheduled Event** — a future, Scheduler-owned plan.
-- **Event** — an action being performed or completed as History.
-- **Project** — an intentional body of work whose progress is evidenced by Events.
-
-### Decision Objects
-
-Decision Objects represent options, direction, and the outcomes of reasoning.
-
-- **Recommendation** — a suggested future action.
-- **Goal** — an emerging long-term direction.
-- **Insight** — reusable learned understanding.
-
-### Observation Objects
-
-Observation Objects represent what the system observes or learns about reality.
-
-- **Context Window** — a temporal activation of Context.
-- **Reflection** — the user's interpretation of a completed Event.
-- **Habit** — a behavioral pattern inferred from repeated Events.
-
-### Planning Objects
-
-Planning Objects continuously shape the future without changing History.
-
-- **Scheduler** — the planning and replanning lifecycle.
-- **Scheduled Event** — the concrete future output of planning.
-- **Recommendation** — accepted input available to planning.
-
-An entity may participate in more than one category where its role crosses a behavioral boundary. Scheduled Event, for example, is both an executable object and the concrete output of planning.
-
----
-
-## 3. Event State Machine
-
-### Purpose
-
-The Event lifecycle describes the movement from a suggested action to a real action and, finally, immutable History. The Recommendation and Scheduled Event portions of this flow are separate entities; the Executing Event begins only when reality confirms that the action started.
-
-### Lifecycle Diagram
+| State | Meaning |
+|---|---|
+| `Recommended` | Decision Engine suggestion has not been accepted for planning. |
+| `Scheduled` | Scheduler placed a future Event in a Context Window. |
+| `Ready` | Planned start is current; Context and Resources permit execution. |
+| `Started` | User began the Event. |
+| `Paused` | User temporarily paused the Event. |
+| `Resumed` | A Paused or Interrupted Event continues. |
+| `Completed` | Execution ended; immutable historical Event. |
+| `Skipped` | Scheduled opportunity passed without a start. |
+| `Cancelled` | A future, paused, or interrupted Event was deliberately abandoned. |
+| `Interrupted` | External reality temporarily stopped execution. |
+| `Overtaken` | A Principle-constrained higher-priority Event replaced it. |
+| `Archived` | Terminal History is outside active reporting. |
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Recommendation: recommendation generated
-    Recommendation --> Scheduled_Event: accepted recommendation consumed by Scheduler
-    Scheduled_Event --> Waiting: Scheduler places future plan
-    Waiting --> Ready: planned start and context become current
-    Ready --> Started: actual start observed
-    Started --> Interrupted: external disturbance
-    Interrupted --> Resumed: resumption confirmed
+    [*] --> Recommended
+    Recommended --> Scheduled: accepted / Scheduler
+    Scheduled --> Ready: time and guards satisfied
+    Ready --> Started: user begins
+    Started --> Paused: user pauses
+    Paused --> Resumed: user resumes
+    Started --> Interrupted: Disturber changes Context
+    Interrupted --> Resumed: Scheduler continuation
     Resumed --> Started: execution continues
-    Started --> Completed: completion observed
-    Resumed --> Completed: completion observed
-
-    Waiting --> Cancelled: plan deliberately removed
-    Ready --> Cancelled: plan deliberately removed
-    Started --> Aborted: execution deliberately stopped
-    Interrupted --> Aborted: execution cannot continue
-    Waiting --> Overtaken: higher-priority plan replaces it
-    Ready --> Overtaken: higher-priority plan replaces it
-    Started --> Overtaken: higher-priority Event replaces it
-    Interrupted --> Overtaken: higher-priority Event replaces it
-    Waiting --> Rescheduled: Scheduler moves future plan
-    Ready --> Rescheduled: Scheduler moves future plan
-    Rescheduled --> Waiting: revised future plan exists
-
-    Completed --> [*]
-    Cancelled --> [*]
-    Aborted --> [*]
-    Overtaken --> [*]
+    Started --> Completed: completion confirmed
+    Scheduled --> Skipped: opportunity passes
+    Scheduled --> Cancelled: deliberate abandonment
+    Paused --> Cancelled: deliberate abandonment
+    Interrupted --> Cancelled: continuation abandoned
+    Scheduled --> Overtaken: higher priority replaces plan
+    Interrupted --> Overtaken: higher priority replaces continuation
+    Completed --> Archived
+    Skipped --> Archived
+    Cancelled --> Archived
 ```
 
-### States
+## Formal transitions
 
-| State | Behavioral meaning |
+| Source | Target | Trigger | Actor | Preconditions | Resulting domain event |
+|---|---|---|---|---|---|
+| `Recommended` | `Scheduled` | User acceptance | Scheduler | Valid Recommendation; Principles, Context, Time, Resources permit plan | `ScheduledEventCreated` |
+| `Scheduled` | `Ready` | Planned time arrives | Scheduler | Current Context Window and Resources satisfy plan | `EventReady` |
+| `Ready` | `Started` | User begins | Scheduler | Event is Ready; no overriding constraint | `EventStarted` |
+| `Started` | `Paused` | User pauses | Scheduler | Event is Started | `EventPaused` |
+| `Paused` | `Resumed` | User resumes | Scheduler | Continuation is viable | `EventResumed` |
+| `Interrupted` | `Resumed` | Recalculation permits continuation | Scheduler | Valid continuation exists | `EventResumed` |
+| `Resumed` | `Started` | Execution continues | Scheduler | User continues action | `EventStarted` |
+| `Started` or `Resumed` | `Completed` | Completion confirmed | Scheduler | Actual execution occurred | `EventCompleted` |
+| `Scheduled` | `Skipped` | Opportunity passes | Scheduler | No start occurred before window ended | `EventSkipped` |
+| `Scheduled`, `Paused`, or `Interrupted` | `Cancelled` | Deliberate abandonment | Scheduler | Authorized cancellation | `EventCancelled` |
+| `Started` | `Interrupted` | Disturber causes Context transition | Scheduler | Material Context change is recorded | `EventInterrupted` |
+| `Scheduled` or `Interrupted` | `Overtaken` | Higher-priority replacement | Scheduler | Replacement respects Principles | `EventOvertaken` |
+| `Completed`, `Skipped`, or `Cancelled` | `Archived` | Archival condition | Scheduler | Terminal state | `EventArchived` |
+
+## Invalid transitions
+
+- `Recommended → Started` or `Completed`; a Recommendation is not execution.
+- `Scheduled → Completed`; a plan is not proof of action.
+- `Completed →` any active state; completed History is immutable.
+- `Skipped`, `Cancelled`, `Overtaken`, or `Archived → Ready`; later opportunity requires a new Scheduled Event.
+- Direct Disturber → Event state; the mandatory Context/Scheduler path must occur.
+
+## Event outcome
+
+Outcome answers: **“What actually happened?”** It is an immutable result recorded alongside the Event lifecycle, not a competing lifecycle state.
+
+| Outcome | Meaning |
 |---|---|
-| `Recommendation` | A possible future action exists as a suggestion. |
-| `Scheduled Event` | The Scheduler has created a distinct future plan. |
-| `Waiting` | The Scheduled Event exists but its planned execution opportunity has not arrived. |
-| `Ready` | The planned opportunity is current and execution may begin. |
-| `Started` | Actual execution has begun; an Executing Event now exists. |
-| `Interrupted` | An external disturbance temporarily stopped execution. |
-| `Resumed` | Interrupted execution has explicitly continued. |
-| `Completed` | The action finished and is immutable History. |
-| `Cancelled` | A future plan was deliberately removed before completion. |
-| `Aborted` | Execution began but was deliberately or necessarily stopped before completion. |
-| `Overtaken` | A higher-priority Event or plan replaced the current one. |
-| `Rescheduled` | A future plan was moved to a revised future opportunity. |
+| `Completed` | Intended action and outcome were achieved. |
+| `Partial` | Some execution occurred but intended scope was not fully achieved. |
+| `Failed` | Execution occurred but intended outcome was not achieved. |
+| `Abandoned` | Execution or continuation was deliberately ended. |
 
-### Transition Meaning
-
-| Transition | Explicit trigger or condition |
-|---|---|
-| `Recommendation` → `Scheduled Event` | The user accepts the Recommendation and the Scheduler consumes it as planning input. |
-| `Scheduled Event` → `Waiting` | The Scheduler places it into a future time and Context Window. |
-| `Waiting` → `Ready` | Its planned start becomes current in a suitable Context Window. |
-| `Ready` → `Started` | Actual user execution is observed or explicitly started. |
-| `Started` → `Interrupted` | An Event Disturber or other external change interrupts execution. |
-| `Interrupted` → `Resumed` | Resumption is explicitly confirmed. |
-| `Resumed` → `Started` | Execution continues. |
-| `Started` or `Resumed` → `Completed` | Completion is observed or explicitly confirmed. |
-| `Waiting` or `Ready` → `Cancelled` | The future plan is deliberately removed. |
-| `Started` or `Interrupted` → `Aborted` | Execution is explicitly ended without completion. |
-| `Waiting`, `Ready`, `Started`, or `Interrupted` → `Overtaken` | A higher-priority Event or plan replaces the current one. |
-| `Waiting` or `Ready` → `Rescheduled` | The Scheduler revises the future execution opportunity. |
-| `Rescheduled` → `Waiting` | The revised future plan is established. |
-
-### Alternate Path Definitions
-
-**Interrupted** means execution was temporarily stopped by an external change. It preserves the expectation that the same Event may resume.
-
-**Cancelled** means a future Scheduled Event was deliberately removed before actual execution began. It is not an Executing Event.
-
-**Aborted** means actual execution began but ended without completion. It records partial reality rather than a cancelled plan.
-
-**Overtaken** means a higher-priority Event or plan replaces the current one. This state is unique to PAIOS: it expresses a loss of priority caused by a better current decision, rather than a simple user cancellation or external interruption.
-
-**Rescheduled** applies only to a future opportunity. It does not alter Event History and it does not turn a Completed Event back into a plan.
-
-### Terminal States
-
-`Completed`, `Cancelled`, `Aborted`, and `Overtaken` are terminal for that lifecycle path.
-
-Completed Events are immutable. Later learning, reflection, or correction creates new behavioral evidence; it never changes the completed Event.
+`Completed` state normally has `Completed` outcome. `Cancelled` or `Overtaken` may have no execution outcome; an interrupted Event that is cancelled may record `Partial` or `Abandoned` outcome. Outcome never permits alteration of Event History.
 
 ---
 
-## 4. Context State Machine
+# 2. Scheduled Event Lifecycle
 
-### Purpose
+## Purpose
 
-Context describes the situation in which reality is occurring. A Context Window is the temporal activation of that Context. It evolves continuously and independently from the Event lifecycle.
-
-### Lifecycle Diagram
+Scheduled Event is the Scheduler-owned future planning object, separate from completed Event History.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: Context Window created
+    [*] --> Proposed: accepted Recommendation
+    Proposed --> Scheduled: Scheduler allocates future window
+    Scheduled --> Ready: planned time arrives
+    Ready --> Fulfilled: user starts Event
+    Scheduled --> Cancelled: plan removed
+    Scheduled --> Overtaken: replacement plan selected
+    Ready --> Expired: window passes without start
+```
+
+| Source | Target | Trigger | Actor | Preconditions | Resulting domain event |
+|---|---|---|---|---|---|
+| `Proposed` | `Scheduled` | Scheduler allocates time/context | Scheduler | Principles and constraints pass | `ScheduledEventCreated` |
+| `Scheduled` | `Ready` | Time and Context align | Scheduler | Resource/Context guards pass | `EventReady` |
+| `Ready` | `Fulfilled` | User starts | Scheduler | Actual start observed | `EventStarted` |
+| `Scheduled` | `Cancelled` | Plan removed | Scheduler | Future-only change | `ScheduledEventCancelled` |
+| `Scheduled` | `Overtaken` | Higher priority plan selected | Scheduler | Replacement is valid | `ScheduledEventOvertaken` |
+| `Ready` | `Expired` | Window passes | Scheduler | No actual start | `ScheduledEventExpired` |
+
+Relationship: `Recommendation → Scheduler → Scheduled Event → Event execution → Completed Event`. A Scheduled Event never becomes a Completed Event; actual start creates Event execution evidence.
+
+---
+
+# 3. Context Window State Machine
+
+Context Window is an active runtime environment, not only Event metadata. A reusable Context does not change; each activation is a separate Window. Old Context remains immutable once Expired or Archived, and a new Window becomes Active.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Created
     Created --> Active: activation begins
-    Active --> Changed: contextual change observed
-    Changed --> Active: updated context becomes current
-    Active --> Archived: activation ends
-    Changed --> Archived: context is no longer current
-    Archived --> [*]
+    Active --> Changing: reality changes
+    Changing --> Expired: replacement/new Context active
+    Active --> Expired: end time
+    Expired --> Archived: archival condition
 ```
 
-### States
+| Source | Target | Trigger | Actor | Preconditions | Resulting domain event |
+|---|---|---|---|---|---|
+| `Created` | `Active` | Start/observed activation | Runtime | No other active Window for User | `ContextActivated` |
+| `Active` | `Changing` | Location, people, environment, trigger, reason, or time changes | Runtime | Meaningful reality change | `ContextChanged` |
+| `Changing` | `Expired` | New Window becomes active | Runtime | Transition confirmed | `ContextExpired` |
+| `Active` | `Expired` | End condition | Runtime | Window no longer current | `ContextExpired` |
+| `Expired` | `Archived` | Archival condition | Runtime | Already expired | `ContextArchived` |
 
-| State | Behavioral meaning |
-|---|---|
-| `Created` | A Context Window has been established but is not current. |
-| `Active` | The Context Window currently describes the user's situation. |
-| `Changed` | A meaningful change in the active situation has been observed. |
-| `Archived` | The Context Window is no longer current and remains only as History. |
-
-### Transition Meaning
-
-| Transition | Explicit trigger or condition |
-|---|---|
-| `Created` → `Active` | The Context Window's activation begins. |
-| `Active` → `Changed` | A location, person, environment, emotion, trigger, reason, or other contextual condition changes. |
-| `Changed` → `Active` | The updated Context Window becomes the current situation. |
-| `Active` or `Changed` → `Archived` | The Context Window ends or is replaced by a subsequent current Context Window. |
-
-### Behavioral Notes
-
-`Changed` is repeatable. A Context Window may move through `Active → Changed → Active` many times during the day as reality evolves.
-
-Every Context Change may produce a Domain Event. That Domain Event can trigger Scheduler recalculation, but the Context Window does not itself decide how the schedule changes.
-
-Context evolves independently from Events. An Event may occur within a Context Window, but an Event transition does not by itself force a Context transition.
+Invalid: `Created → Expired`, `Expired → Active`, or `Archived → Active`. Scheduler receives Context events and recalculates only when future feasibility, priority, Resources, or time is materially affected. Decision Engine reads active Context to select available candidates but owns no Context data.
 
 ---
 
-## 5. Scheduler State Machine
+# 4. Scheduler State Machine
 
-### Purpose
-
-The Scheduler is the planning object that continuously turns accepted Recommendations and current runtime conditions into future Scheduled Events. It is not a one-time plan generator.
-
-### Lifecycle Diagram
+Scheduler plans future Events and never edits History.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Created: Scheduler initialized
-    Created --> Planning: planning cycle begins
-    Planning --> Waiting: future plan established
-    Waiting --> Monitoring: current time reaches runtime observation period
-    Monitoring --> Replanning: reality changes or plan deviation detected
-    Replanning --> Updated: revised future plan established
-    Updated --> Monitoring: revised plan becomes current
-    Monitoring --> Finished: planning horizon ends
-    Finished --> [*]
+    [*] --> Idle
+    Idle --> Observing: planning trigger
+    Observing --> Evaluating: current state available
+    Evaluating --> Planning: Principles and constraints evaluated
+    Planning --> Scheduling: valid future plan formed
+    Scheduling --> Monitoring: Scheduled Events created
+    Monitoring --> Recalculating: material deviation
+    Recalculating --> Scheduling: revised plan formed
+    Monitoring --> Idle: horizon ends
 ```
 
-### States
+| Source | Target | Trigger | Actor | Preconditions | Resulting domain event |
+|---|---|---|---|---|---|
+| `Idle` | `Observing` | Acceptance, clock, Context, Resource, or Disturber change | Scheduler | Current input available | `PlanningStarted` |
+| `Observing` | `Evaluating` | Current Runtime State captured | Scheduler | Current time/context/resources known | `PlanEvaluationStarted` |
+| `Evaluating` | `Planning` | Candidate options assessed | Scheduler | Principles constrain options | `PlanCandidatesEvaluated` |
+| `Planning` | `Scheduling` | Valid future plan formed | Scheduler | Future-only, feasible plan | `PlanCreated` |
+| `Scheduling` | `Monitoring` | Scheduled Events created | Scheduler | Future plan persisted behaviorally | `PlanUpdated` |
+| `Monitoring` | `Recalculating` | Material reality deviation | Scheduler | Affected future plan | `RecalculationTriggered` |
+| `Recalculating` | `Scheduling` | Revised plan formed | Scheduler | Principles/constraints rechecked | `PlanRevised` |
+| `Monitoring` | `Idle` | Horizon ends | Scheduler | Nothing future to monitor | `PlanningFinished` |
 
-| State | Behavioral meaning |
-|---|---|
-| `Created` | The Scheduler is available but has not entered a planning cycle. |
-| `Planning` | It is forming a future plan from current inputs. |
-| `Waiting` | A future plan exists and the Scheduler is waiting for the next relevant runtime point. |
-| `Monitoring` | It is comparing planned future activity with current reality. |
-| `Replanning` | A meaningful reality change requires the future plan to be reconsidered. |
-| `Updated` | A revised future plan has been established. |
-| `Finished` | The defined planning horizon has ended. |
-
-### Transition Meaning
-
-| Transition | Explicit trigger or condition |
-|---|---|
-| `Created` → `Planning` | A planning cycle begins. |
-| `Planning` → `Waiting` | A future plan is established. |
-| `Waiting` → `Monitoring` | The next runtime observation period begins. |
-| `Monitoring` → `Replanning` | A Context change, Event Disturber, resource change, time deviation, new accepted Recommendation, or other meaningful reality change occurs. |
-| `Replanning` → `Updated` | A revised future plan is established. |
-| `Updated` → `Monitoring` | The revised plan becomes the active plan under observation. |
-| `Monitoring` → `Finished` | The planning horizon explicitly ends. |
-
-### Behavioral Notes
-
-The Scheduler continuously monitors reality rather than generating a fixed plan. It plans only the future and never changes Event History.
-
-`Replanning` is triggered by changed reality, not by the existence of a CRUD update. The Scheduler may create, cancel, overtake, or reschedule future Scheduled Events as part of a changed future plan; completed Events remain untouched.
+Invalid: bypassing `Evaluating`/`Planning`, modifying completed Events, or changing future plans without Principles. Disturbers cause `Monitoring → Recalculating` through Context transition, never direct Event mutation.
 
 ---
 
-## 6. Recommendation State Machine
-
-### Purpose
-
-A Recommendation is a Decision Engine suggestion. It represents a possible future action, not a command, a Scheduled Event, or an Event.
-
-### Lifecycle Diagram
+# 5. Event Disturber State Machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Generated: Decision Engine produces suggestion
-    Generated --> Pending: recommendation presented
+    [*] --> Detected
+    Detected --> Recorded: change captured
+    Recorded --> Analyzed: impact understood
+    Analyzed --> Applied: Context transition and Scheduler trigger
+    Applied --> Resolved: response established
+    Resolved --> Archived: archival condition
+```
+
+| Source | Target | Trigger | Actor | Preconditions | Resulting domain event |
+|---|---|---|---|---|---|
+| `Detected` | `Recorded` | Unexpected reality change captured | Runtime | Material disturbance exists | `DisturbanceDetected` |
+| `Recorded` | `Analyzed` | Impact assessed | Runtime | Context/time/resource impact known | `DisturbanceAnalyzed` |
+| `Analyzed` | `Applied` | Context transition required | Runtime | Impact affects runtime reality | `ContextChanged` |
+| `Applied` | `Resolved` | Scheduler response completed | Scheduler | Recalculation result established | `DisturbanceResolved` |
+| `Resolved` | `Archived` | Archival condition | Runtime | No active response required | `DisturbanceArchived` |
+
+Invalid: `Detected → Applied`, any direct Disturber → Event transition, or `Archived → Analyzed`.
+
+---
+
+# 6. Recommendation Lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> Generated
+    Generated --> Pending: presented
     Pending --> Accepted: user accepts
-    Accepted --> Scheduler: accepted input consumed for planning
     Pending --> Rejected: user rejects
-    Pending --> Expired: time, context, or relevance expires
-    Scheduler --> [*]
-    Rejected --> [*]
-    Expired --> [*]
+    Pending --> Expired: validity ends
+    Accepted --> [*]: Scheduler consumes for planning
 ```
 
-### States
+| Source | Target | Trigger | Actor | Preconditions | Resulting domain event |
+|---|---|---|---|---|---|
+| `Generated` | `Pending` | Recommendation presented | Runtime | Principle-constrained and still valid | `RecommendationPresented` |
+| `Pending` | `Accepted` | User accepts | Scheduler | Not expired; still Principle-compliant | `RecommendationAccepted` |
+| `Pending` | `Rejected` | User rejects | Scheduler | Pending | `RecommendationRejected` |
+| `Pending` | `Expired` | Validity ends | Scheduler | Time/Context/Resources changed | `RecommendationExpired` |
+| `Accepted` | `Consumed` | Scheduler incorporates recommendation | Scheduler | Future plan can consume it | `RecommendationConsumed` |
 
-| State | Behavioral meaning |
-|---|---|
-| `Generated` | The Decision Engine has produced a suggestion. |
-| `Pending` | The suggestion is available for user consideration. |
-| `Accepted` | The user has explicitly accepted it as Scheduler input. |
-| `Scheduler` | The accepted Recommendation has been handed to the Scheduler for planning. |
-| `Rejected` | The user has explicitly declined the Recommendation. |
-| `Expired` | The Recommendation is no longer relevant or valid. |
-
-### Transition Meaning
-
-| Transition | Explicit trigger or condition |
-|---|---|
-| `Generated` → `Pending` | The Recommendation is presented to the user. |
-| `Pending` → `Accepted` | The user explicitly accepts it. |
-| `Accepted` → `Scheduler` | The Scheduler consumes it as planning input. |
-| `Pending` → `Rejected` | The user explicitly rejects it. |
-| `Pending` → `Expired` | Its time, Context, resource, or relevance validity ends. |
-
-### Behavioral Notes
-
-Rejected Recommendations remain historical evidence. Rejection is meaningful behavioral feedback: it records that a suggestion was considered and not chosen. It may inform future reasoning, but it does not alter past Events.
-
-The `Scheduler` state is not execution. It is the handoff boundary after acceptance. Only the Scheduler may create a Scheduled Event, and only actual execution may create an Event.
+Invalid: `Generated → Accepted`, `Pending → Consumed`, and `Rejected`/`Expired → Accepted`. Rejected Recommendations remain immutable decision evidence.
 
 ---
 
-## 7. Design Notes
+## Relationship with Reflections, Resources, and Learning
 
-### Event Lifecycle
-
-The Event state machine gives the Event Lifecycle its behavioral sequence. It explicitly separates suggestion, future planning, actual execution, interruption, completion, and immutable History.
-
-### Runtime Loop
-
-The Runtime Loop continually observes reality. Its observed changes provide the triggers that move Context Windows, Events, Recommendations, and the Scheduler through their state machines.
-
-### Behavioral Architecture
-
-These machines keep the Behavioral Architecture change-driven. A meaningful domain condition causes a transition; the transition makes runtime state understandable; that changed state may cause another component to respond.
-
-### Decision Engine
-
-The Decision Engine generates Recommendations from runtime state and History. It does not execute Events or alter History. Accepted Recommendations cross the Scheduler boundary, where they may become future Scheduled Events. Completed Events then become evidence for Reflection, Insight, Habit inference, Goal emergence, and better future Recommendations.
+Completed Event produces `EventCompleted`, which may trigger Resource updates, Knowledge updates, Project Progress updates, Habit detection, and Reflection opportunity. A Reflection explains history; it cannot change Event state. Every derived update is new evidence linked to immutable Event History.
 
 ```mermaid
-flowchart LR
-    Reality[Reality change] --> Context[Context state change]
-    Context --> Scheduler[Scheduler monitoring or replanning]
-    Scheduler --> Scheduled[Scheduled Event]
-    Decision[Decision Engine] --> Recommendation[Recommendation]
-    Recommendation --> Scheduler
-    Scheduled --> Event[Executing Event]
-    Event --> History[Completed immutable Event]
-    History --> Learning[Reflection, Insight, Habit, Goal]
-    Learning --> Decision
+flowchart TD
+    Event[Completed immutable Event] --> Resources[Resource updates]
+    Event --> Knowledge[Knowledge updates]
+    Event --> Progress[Progress updates]
+    Event --> Reflection[Reflection]
+    Reflection --> Insight[Insight]
+    Event --> Habits[Habit detection]
+    Insight --> Decision[Decision Engine]
+    Habits --> Decision
+    Decision --> Recommendation[Recommendation]
+    Recommendation --> Scheduler[Scheduler]
 ```
-
-The result is a continuous behavioral loop: observe reality, understand its state, decide, plan, execute, learn, and respond to the next change.

@@ -127,7 +127,8 @@ As of v0.4, three distinct categories of rule are represented here, and they are
 
 - The Decision Engine owns no data.
 - The Decision Engine never writes to History.
-- The Decision Engine's only outputs are Recommendations, priority evaluations, and Scheduler inputs.
+- The Decision Engine's only outputs are Recommendations, Priority Evaluations, Confidence Scores, Explanations, and Scheduler Inputs.
+- The Decision Engine never decides when the Scheduler replans; replanning is owned exclusively by the Scheduler.
 
 ---
 

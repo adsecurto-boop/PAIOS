@@ -1037,7 +1037,8 @@ Analyze runtime state and historical data to generate intelligent Recommendation
 
 The Decision Engine consumes:
 
-- **Events**: Historical Event data
+- **Events (Completed Events)**: Raw historical Event data, supporting pattern recognition, habit detection, and historical success analysis
+- **Impact Classification**: Historical Opportunity/Neutral/Distraction patterns, supporting reasoning and candidate generation
 - **Projects**: Active Projects and Progress
 - **Resources**: Current Resource state
 - **Knowledge**: Current Knowledge state
@@ -1046,14 +1047,19 @@ The Decision Engine consumes:
 - **Principles**: Immutable constraints
 - **Current Time**: Runtime clock
 
+This is a summary; see `DECISION_ENGINE.md` Section 2 for the complete input list.
+
 ### Decision Engine Outputs
 
 The Decision Engine produces:
 
-- **Recommendations**: Action suggestions
+- **Recommendations**: Action suggestions — the system's "Next Best Action" for the current moment
 - **Priority evaluation**: Relative importance scores
-- **Next best action**: Immediate recommendation
+- **Confidence scores**: Certainty that a Recommendation is appropriate
+- **Explanations**: Rationale behind each Recommendation
 - **Scheduler inputs**: Planning constraints and preferences
+
+See `DECISION_ENGINE.md` Section 8 for the full specification of these outputs.
 
 ### Decision Flow
 
