@@ -78,6 +78,13 @@ _SPECS = (
         0,
         1,
     ),
+    CommandSpec(
+        "serve",
+        "serve [port]",
+        "Run the REST API server (default port 8765), Ctrl+C stops",
+        0,
+        1,
+    ),
     # --- Milestone 10: Domain Operations (entity management) -------------
     CommandSpec("user add", "user add <name...>", "Create a user", 1, None),
     CommandSpec("user list", "user list", "List users"),

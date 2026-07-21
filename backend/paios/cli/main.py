@@ -57,6 +57,23 @@ def main(
             application.stop()
         return 0
 
+    if arguments[0] == "serve":
+        from paios.api import ApiConfig, serve
+
+        try:
+            port = ApiConfig.port
+            if len(arguments) > 1:
+                if not arguments[1].isdigit():
+                    raise CliError(f"Port must be a number, got {arguments[1]!r}")
+                port = int(arguments[1])
+            return serve(
+                ApiConfig(port=port, data_dir=str(config.data_dir)),
+                output_stream=out,
+            )
+        except CliError as error:
+            out.write(f"Error: {error}\n")
+            return 1
+
     if arguments[0] == "dashboard":
         try:
             config = build_dashboard_config(arguments[1:])

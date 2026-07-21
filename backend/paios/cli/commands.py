@@ -475,6 +475,13 @@ class CommandProcessor:
         self._app.archive_event(self._resolve_event(args[0]))
         return "Event archived."
 
+    # --- serve (process-bound; runs via `paios serve`) --------------------
+
+    def _cmd_serve(self, args) -> str:
+        # The API server owns a socket and the process foreground; only
+        # the `paios serve` entry point may run it.
+        raise CliError("The API server runs via `paios serve [port]`")
+
     # --- dashboard (stream-bound; runs from shell or `paios dashboard`) ---
 
     def _cmd_dashboard(self, args) -> str:
