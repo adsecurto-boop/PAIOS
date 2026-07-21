@@ -97,6 +97,25 @@ class TestEventEndpoints:
         ) == {"result": "cancelled"}
         assert ok(router, "GET", f"/events/{event_id}")["status"] == "Cancelled"
 
+    def test_archive_after_completion(self, router):
+        # M15 approved correction: POST /events/{id}/archive.
+        event_id = materialize_event(router)
+        ok(router, "POST", f"/events/{event_id}/start")
+        ok(router, "POST", f"/events/{event_id}/complete")
+        assert ok(router, "POST", f"/events/{event_id}/archive") == {
+            "result": "archived"
+        }
+        assert ok(router, "GET", f"/events/{event_id}")["status"] == "Archived"
+
+    def test_archive_running_event_is_rejected(self, router):
+        event_id = materialize_event(router)
+        ok(router, "POST", f"/events/{event_id}/start")
+        status, payload = router.handle(
+            "POST", f"/events/{event_id}/archive"
+        )
+        assert status >= 400  # invalid transition, translated - not a crash
+        assert "error" in payload
+
 
 class TestGoalEndpoints:
     def test_create_and_lifecycle(self, router):

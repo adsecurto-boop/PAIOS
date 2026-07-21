@@ -45,16 +45,20 @@ class TestNavigation:
             window.navigation.item(i).text()
             for i in range(window.navigation.count())
         ]
-        assert names == [
+        # The Notifications entry may carry an unread badge, e.g.
+        # "Notifications (1)" after the connect notice — strip it.
+        normalized = [name.split(" (")[0] for name in names]
+        assert normalized == [
             "Dashboard", "Goals", "Projects", "Events", "Resources",
-            "Knowledge", "Learning", "History", "Settings", "Refresh",
+            "Knowledge", "Learning", "History", "Notifications",
+            "Settings", "Refresh",
         ]
-        for row in range(9):
+        for row in range(10):
             window.navigation.setCurrentRow(row)
             assert window.pages.currentIndex() == row
         # The trailing Refresh entry refreshes and bounces back.
-        window.navigation.setCurrentRow(9)
-        assert window.pages.currentIndex() == 8
+        window.navigation.setCurrentRow(10)
+        assert window.pages.currentIndex() == 9
 
     def test_shortcut_objects_installed(self, window):
         from PySide6.QtGui import QShortcut

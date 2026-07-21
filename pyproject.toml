@@ -1,8 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "paios"
-version = "0.4.0"
-description = "PAIOS - Personal AI Operating System (Domain Layer)"
+version = "1.6.0"
+description = "PAIOS - Personal AI Operating System"
 requires-python = ">=3.12"
+# The backend is deliberately dependency-free (stdlib only).
+dependencies = []
+
+[project.optional-dependencies]
+# The desktop GUI tier (M13) is the only tier with a third-party need.
+gui = ["PySide6-Essentials>=6.7"]
+
+[project.scripts]
+# The launchers (M16): installed onto PATH by pip, no PYTHONPATH needed.
+# `paios shell` / `paios dashboard` / `paios serve` / `paios gui` are
+# subcommands of the single `paios` executable.
+paios = "paios.cli.main:main"
+paios-gui = "paios_gui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["backend", "frontend/desktop"]
+include = ["paios*", "paios_gui*"]
+
+[tool.setuptools.package-dir]
+paios = "backend/paios"
+paios_gui = "frontend/desktop/paios_gui"
 
 [tool.pytest.ini_options]
 pythonpath = ["backend", "frontend/desktop", "."]

@@ -18,13 +18,10 @@ from paios.domain.enums import (
     ResourceType,
 )
 from paios.domain.value_objects.identifiers import (
-    ContextId,
     EventId,
     GoalId,
-    KnowledgeId,
     ProjectId,
     RecommendationId,
-    ReflectionId,
     ResourceId,
     UserId,
 )
@@ -147,6 +144,11 @@ class ApiRouter:
             reason=schemas.optional_string(body, "reason"),
         )
         return 200, {"result": "cancelled"}
+
+    def _post_event_archive(self, params, body):
+        # M15 approved correction: the mobile client's Archive action.
+        self._app.archive_event(EventId(params["id"]))
+        return 200, {"result": "archived"}
 
     # --- goals -----------------------------------------------------------
 
@@ -373,6 +375,7 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("POST", ("events", "{id}", "resume"), ApiRouter._post_event_resume),
     ("POST", ("events", "{id}", "complete"), ApiRouter._post_event_complete),
     ("POST", ("events", "{id}", "cancel"), ApiRouter._post_event_cancel),
+    ("POST", ("events", "{id}", "archive"), ApiRouter._post_event_archive),
     ("GET", ("goals",), ApiRouter._get_goals),
     ("POST", ("goals",), ApiRouter._post_goals),
     ("POST", ("goals", "{id}", "complete"), ApiRouter._post_goal_complete),

@@ -85,6 +85,45 @@ _SPECS = (
         0,
         1,
     ),
+    # --- Milestone 16: Deployment ----------------------------------------
+    CommandSpec("init", "init", "First-run setup: config file + directories"),
+    CommandSpec("health", "health", "Run system diagnostics"),
+    CommandSpec("gui", "gui", "Launch the desktop dashboard (Qt)"),
+    CommandSpec(
+        "daemon",
+        "daemon <run|start|stop|restart|status>",
+        "Run or manage the background runtime daemon",
+        0,
+        1,
+    ),
+    CommandSpec(
+        "backup",
+        "backup <now|list|restore <name>|export <path>|import <path>>",
+        "Create, list, restore, export or import store backups",
+        0,
+        2,
+    ),
+    # --- Milestone 14: Notifications -------------------------------------
+    CommandSpec(
+        "notifications",
+        "notifications",
+        "Show unread notifications and mark them read",
+    ),
+    CommandSpec(
+        "notifications history",
+        "notifications history",
+        "Show all retained notifications",
+    ),
+    CommandSpec(
+        "notifications unread",
+        "notifications unread",
+        "Show the unread notification count",
+    ),
+    CommandSpec(
+        "notifications clear",
+        "notifications clear",
+        "Clear the notification history",
+    ),
     # --- Milestone 10: Domain Operations (entity management) -------------
     CommandSpec("user add", "user add <name...>", "Create a user", 1, None),
     CommandSpec("user list", "user list", "List users"),

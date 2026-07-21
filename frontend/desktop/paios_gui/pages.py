@@ -359,6 +359,38 @@ class HistoryPage(TablePage):
         )
 
 
+class NotificationsPage(TablePage):
+    """The notification center (M14): history list, unread state, and
+    the two maintenance actions. Reads the window's NotificationCenter —
+    notifications are GUI presentation state, not a REST resource."""
+
+    title = "Notifications"
+    columns = ("", "Time", "Category", "Message")
+
+    def _build_toolbar(self) -> None:
+        self._add_button("Mark all read", self._on_mark_read)
+        self._add_button("Clear", self._on_clear)
+
+    def fetch(self, client):
+        return self._window.notification_center.entries()
+
+    def cells(self, row):
+        return (
+            "" if row.read else "*",
+            row.occurred_at or "—",
+            row.category,
+            row.message,
+        )
+
+    def _on_mark_read(self) -> None:
+        self._window.notification_center.mark_all_read()
+        self._window.refresh_now()
+
+    def _on_clear(self) -> None:
+        self._window.notification_center.clear()
+        self._window.refresh_now()
+
+
 class SettingsPage(QWidget):
     """Refresh interval (the configurable poll) and connection info."""
 

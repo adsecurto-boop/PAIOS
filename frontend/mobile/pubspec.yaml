@@ -1,0 +1,24 @@
+name: paios_mobile
+description: PAIOS Mobile Companion - a REST-only remote client (Milestone 15).
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # HTTP transport - the app's only doorway into PAIOS.
+  http: ^1.2.0
+  # Preferences + cached dashboard + notification history (the three
+  # permitted local stores; no domain state).
+  shared_preferences: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

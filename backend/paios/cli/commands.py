@@ -56,14 +56,28 @@ class CommandProcessor:
     """Routes parsed commands to the Application. Zero logic, one
     delegation per command."""
 
-    def __init__(self, application: Application) -> None:
+    def __init__(
+        self,
+        application: Application,
+        notification_manager=None,
+        bus_observer=None,
+    ) -> None:
         self._app = application
+        # Milestone 14: an optional Event Bus observer this composition
+        # root wires to the bus whenever the Application is started.
+        self._notifications = notification_manager
+        # Milestone 16: the structured-log bus observer, same lifecycle.
+        self._bus_observer = bus_observer
 
     @property
     def application(self) -> Application:
         """Read-only access for sibling presentation surfaces (the Shell
         hands the same Application to the Dashboard)."""
         return self._app
+
+    @property
+    def notifications(self):
+        return self._notifications
 
     # --- dispatch --------------------------------------------------------
 
@@ -72,7 +86,35 @@ class CommandProcessor:
         handler = getattr(self, "_cmd_" + normalized, None)
         if handler is None:
             raise CliError(f"Command {command.name!r} has no handler")
-        return handler(command.args)
+        self._sync_notification_observer()
+        result = handler(command.args)
+        self._sync_notification_observer()
+        return result
+
+    def _sync_notification_observer(self) -> None:
+        """Keep the observer attached exactly while the app is started.
+
+        Attaching happens here — the composition root — so the
+        Application layer stays untouched (M14 audit rule). The bus is
+        rebuilt on every start, hence re-attachment after restarts."""
+        manager = self._notifications
+        observer = self._bus_observer
+        if manager is None and observer is None:
+            return
+        if self._app.started:
+            components = self._app.components
+            if manager is not None and not manager.attached:
+                manager.attach(
+                    components.kernel.event_bus,
+                    started_at=components.clock.now(),
+                )
+            if observer is not None and not observer.attached:
+                observer.attach(components.kernel.event_bus)
+        else:
+            if manager is not None and manager.attached:
+                manager.detach()
+            if observer is not None and observer.attached:
+                observer.detach()
 
     # --- system ----------------------------------------------------------
 
@@ -481,6 +523,73 @@ class CommandProcessor:
         # The API server owns a socket and the process foreground; only
         # the `paios serve` entry point may run it.
         raise CliError("The API server runs via `paios serve [port]`")
+
+    # --- process-bound M16 surfaces (command-line entry points only) ------
+
+    def _cmd_init(self, args) -> str:
+        raise CliError("Initialization runs via `paios init`")
+
+    def _cmd_health(self, args) -> str:
+        raise CliError("Diagnostics run via `paios health`")
+
+    def _cmd_gui(self, args) -> str:
+        raise CliError("The desktop GUI launches via `paios gui`")
+
+    def _cmd_daemon(self, args) -> str:
+        raise CliError(
+            "The daemon is managed via"
+            " `paios daemon <run|start|stop|restart|status>`"
+        )
+
+    def _cmd_backup(self, args) -> str:
+        raise CliError(
+            "Backups run via `paios backup"
+            " <now|list|restore|export|import>`"
+        )
+
+    # --- notifications (Milestone 14) -------------------------------------
+
+    def _require_notifications(self):
+        if self._notifications is None:
+            raise CliError("Notifications are not enabled in this session")
+        return self._notifications
+
+    @staticmethod
+    def _notification_line(notification) -> str:
+        marker = "*" if not notification.read else " "
+        return (
+            f"{marker} [{notification.occurred_at.strftime('%H:%M')}]"
+            f" [{notification.category.value}] {notification.message}"
+        )
+
+    def _cmd_notifications(self, args) -> str:
+        history = self._require_notifications().history
+        unread = history.unread()
+        if not unread:
+            return "No unread notifications."
+        lines = [f"{len(unread)} unread notification(s):"]
+        lines += [self._notification_line(n) for n in unread]
+        history.mark_all_read()
+        return "\n".join(lines)
+
+    def _cmd_notifications_history(self, args) -> str:
+        history = self._require_notifications().history
+        entries = history.entries()
+        if not entries:
+            return "No notifications recorded."
+        lines = [
+            f"{len(entries)} notification(s), {history.unread_count} unread:"
+        ]
+        lines += [self._notification_line(n) for n in entries]
+        return "\n".join(lines)
+
+    def _cmd_notifications_unread(self, args) -> str:
+        history = self._require_notifications().history
+        return f"Unread notifications: {history.unread_count}"
+
+    def _cmd_notifications_clear(self, args) -> str:
+        dropped = self._require_notifications().history.clear()
+        return f"Notification history cleared ({dropped} dropped)."
 
     # --- dashboard (stream-bound; runs from shell or `paios dashboard`) ---
 

@@ -70,7 +70,12 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
         self._respond(status, response)
 
     def log_message(self, format: str, *args) -> None:
-        """Quiet by default; the server owns user-facing output."""
+        """No console noise; requests go to the structured log (M16).
+        Without configured handlers this is a no-op, preserving the
+        pre-M16 silence."""
+        import logging
+
+        logging.getLogger("paios.api").info(format, *args)
 
 
 class _BadBody(Exception):

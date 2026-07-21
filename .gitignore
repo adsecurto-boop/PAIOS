@@ -17,3 +17,9 @@ Thumbs.db
 
 # PAIOS Data
 .data/
+# M16 build artifacts
+dist/
+build/
+*.egg-info/
+.logs/
+.backups/

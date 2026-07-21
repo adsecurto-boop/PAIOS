@@ -1,0 +1,13 @@
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+# Platform scaffolding is generated locally (see README):
+#   flutter create --platforms=android .
+android/
+ios/
+linux/
+macos/
+windows/
+web/

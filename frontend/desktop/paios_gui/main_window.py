@@ -25,12 +25,18 @@ from paios_gui import format as fmt
 from paios_gui.client import ApiClient, ApiResponseError, ApiUnreachable
 from paios_gui.config import GuiConfig
 from paios_gui.dashboard_page import DashboardPage
+from paios_gui.notifications import (
+    DashboardWatcher,
+    GuiNotification,
+    NotificationCenter,
+)
 from paios_gui.pages import (
     EventsPage,
     GoalsPage,
     HistoryPage,
     KnowledgePage,
     LearningPage,
+    NotificationsPage,
     ProjectsPage,
     ResourcesPage,
     SettingsPage,
@@ -44,6 +50,10 @@ class MainWindow(QMainWindow):
         self.config = config
         self.online: bool | None = None  # unknown until the first poll
         self._last_refresh: str | None = None
+        # M14: notification center + the poll-diff watcher feeding it.
+        self.notification_center = NotificationCenter()
+        self._watcher = DashboardWatcher()
+        self._tray = self._create_tray()
 
         self.setWindowTitle("PAIOS — Desktop Dashboard")
         self.resize(1100, 760)
@@ -79,8 +89,10 @@ class MainWindow(QMainWindow):
             ("Knowledge", KnowledgePage(self)),
             ("Learning", LearningPage(self)),
             ("History", HistoryPage(self)),
+            ("Notifications", NotificationsPage(self)),
             ("Settings", SettingsPage(self)),
         ]
+        self._notifications_row = 8  # nav index of the Notifications page
         for name, page in self._page_list:
             self.navigation.addItem(name)
             self.pages.addWidget(page)
@@ -125,18 +137,21 @@ class MainWindow(QMainWindow):
     # --- polling ---------------------------------------------------------
 
     def refresh_now(self) -> None:
-        """Fetch what the visible page needs. Never raises."""
+        """Fetch what the visible page needs. Never raises.
+
+        `/dashboard` is fetched on every poll regardless of page — it
+        feeds the notification watcher, so news is noticed while any
+        page is open."""
         page = self.current_page()
         try:
+            dashboard = self.client.get_dashboard()
             if page is self.dashboard:
-                dashboard = self.client.get_dashboard()
                 resources = self.client.get_resources()
                 reflections = self.client.get_reflections()
                 self.dashboard.update_data(dashboard, resources, reflections)
-                self._last_refresh = fmt.clock(dashboard["current_time"])
             else:
                 page.refresh(self.client)
-                self._last_refresh = "just now"
+            self._last_refresh = fmt.clock(dashboard["current_time"])
         except ApiUnreachable as error:
             self._set_online(False, str(error))
             return
@@ -146,6 +161,8 @@ class MainWindow(QMainWindow):
             self.notify(f"Server error: {error}", "error")
             return
         self._set_online(True)
+        self._absorb(self._watcher.observe(dashboard))
+        self._update_notifications_view()
         self._update_footer()
 
     def set_refresh_interval(self, seconds: int) -> None:
@@ -169,8 +186,75 @@ class MainWindow(QMainWindow):
         self.refresh_now()
 
     def notify(self, text: str, kind: str = "info") -> None:
+        """Action feedback and connection changes: status bar + feed +
+        center history (no desktop toast — the user is looking already)."""
+        import logging
+
+        logging.getLogger("paios.gui").info("kind=%s message=%s", kind, text)
         self.statusBar().showMessage(text, 8000)
         self.dashboard.notice_log.add_notice(text, kind)
+        self.notification_center.add(
+            GuiNotification(message=text, category="App", kind=kind)
+        )
+        self._update_notifications_view()
+
+    # --- notification center (M14) ---------------------------------------
+
+    def _absorb(self, fresh: list[GuiNotification]) -> None:
+        """Record watcher findings; toast them — they happened elsewhere."""
+        for notification in fresh:
+            self.notification_center.add(notification)
+            self.dashboard.notice_log.add_notice(
+                notification.message, notification.kind
+            )
+            self._toast(notification)
+        if fresh:
+            self._update_notifications_view()
+
+    def _toast(self, notification: GuiNotification) -> None:
+        if self._tray is None:
+            return
+        from PySide6.QtWidgets import QSystemTrayIcon
+
+        self._tray.showMessage(
+            "PAIOS",
+            notification.message,
+            (
+                QSystemTrayIcon.MessageIcon.Critical
+                if notification.kind == "error"
+                else QSystemTrayIcon.MessageIcon.Information
+            ),
+            6000,
+        )
+
+    def _create_tray(self):
+        """A tray icon for desktop toasts; None where no tray exists
+        (headless test runs, some desktops) — the center still records."""
+        from PySide6.QtWidgets import QApplication, QStyle, QSystemTrayIcon
+
+        try:
+            if not QSystemTrayIcon.isSystemTrayAvailable():
+                return None
+            icon = QApplication.instance().style().standardIcon(
+                QStyle.StandardPixmap.SP_MessageBoxInformation
+            )
+            tray = QSystemTrayIcon(icon, self)
+            tray.setToolTip("PAIOS")
+            tray.show()
+            return tray
+        except Exception:
+            return None
+
+    def _update_notifications_view(self) -> None:
+        """Badge on the nav entry + live table when the page is visible."""
+        unread = self.notification_center.unread_count
+        item = self.navigation.item(self._notifications_row)
+        item.setText(
+            f"Notifications ({unread})" if unread else "Notifications"
+        )
+        page = self._page_list[self._notifications_row][1]
+        if self.pages.currentWidget() is page:
+            page.refresh(self.client)
 
     # --- connection state ------------------------------------------------
 
