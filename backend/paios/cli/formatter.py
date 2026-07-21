@@ -256,6 +256,288 @@ def format_debug_bus(bus) -> str:
     return "\n".join(lines)
 
 
+# --- Milestone 10: entity management ------------------------------------
+
+
+def _listing(title: str, items, line, empty: str) -> str:
+    if not items:
+        return empty
+    lines = [title]
+    for index, item in enumerate(items, start=1):
+        lines.append(f"{index}. {line(item)}")
+    return "\n".join(lines)
+
+
+def _detail(pairs) -> str:
+    width = max(len(label) for label, _ in pairs) + 1
+    return "\n".join(
+        f"{(label + ':'):<{width}} {value if value not in (None, '') else '-'}"
+        for label, value in pairs
+    )
+
+
+def format_users(users) -> str:
+    return _listing(
+        "Users:",
+        users,
+        lambda user: f"{user.name} (last active {_time(user.last_active)})",
+        "No users.",
+    )
+
+
+def format_user_detail(user) -> str:
+    return _detail(
+        (
+            ("User", user.user_id),
+            ("Name", user.name),
+            ("Created", _time(user.created_at)),
+            ("Last active", _time(user.last_active)),
+        )
+    )
+
+
+def format_goals(goals) -> str:
+    return _listing(
+        "Goals:",
+        goals,
+        lambda goal: (
+            f"[{_value(goal.status)}] {goal.name}"
+            + ("" if goal.accepted_by_user else " (not yet accepted)")
+        ),
+        "No goals.",
+    )
+
+
+def format_goal_detail(goal) -> str:
+    return _detail(
+        (
+            ("Goal", goal.goal_id),
+            ("Name", goal.name),
+            ("Description", goal.description),
+            ("Status", _value(goal.status)),
+            ("Suggested by", goal.suggested_by),
+            ("Accepted", "yes" if goal.accepted_by_user else "no"),
+            ("Accepted at", _time(goal.accepted_at)),
+            ("Projects", ", ".join(str(p) for p in goal.related_project_ids)),
+        )
+    )
+
+
+def format_project_list(projects) -> str:
+    return _listing(
+        "Projects:",
+        projects,
+        lambda project: f"[{_value(project.status)}] {project.name}",
+        "No projects.",
+    )
+
+
+def format_project_detail(project, progress) -> str:
+    pairs = [
+        ("Project", project.project_id),
+        ("Name", project.name),
+        ("Description", project.description),
+        ("Status", _value(project.status)),
+        ("Created", _time(project.created_at)),
+    ]
+    if progress is not None:
+        pairs.extend(
+            (
+                ("Completion", f"{progress.completion_percentage:g}%"),
+                ("Velocity", f"{progress.velocity:g}"),
+                ("Progress updated", _time(progress.last_updated)),
+            )
+        )
+    return _detail(tuple(pairs))
+
+
+def format_principles(principles) -> str:
+    return _listing(
+        "Principles:",
+        principles,
+        lambda principle: (
+            f"[{_value(principle.category)}] {principle.name}"
+        ),
+        "No principles.",
+    )
+
+
+def format_principle_detail(principle) -> str:
+    return _detail(
+        (
+            ("Principle", principle.principle_id),
+            ("Name", principle.name),
+            ("Description", principle.description),
+            ("Category", _value(principle.category)),
+            ("Created", _time(principle.created_at)),
+            ("Last reviewed", _time(principle.last_reviewed)),
+        )
+    )
+
+
+def format_resources(resources) -> str:
+    return _listing(
+        "Resources:",
+        resources,
+        lambda resource: (
+            f"{resource.type.value} = {resource.current_value:g} "
+            f"{resource.unit}"
+        ),
+        "No resources.",
+    )
+
+
+def format_resource_detail(resource) -> str:
+    return _detail(
+        (
+            ("Resource", resource.resource_id),
+            ("Type", _value(resource.type)),
+            ("Value", f"{resource.current_value:g} {resource.unit}"),
+            (
+                "Negative allowed",
+                "yes" if resource.negative_allowed else "no",
+            ),
+            ("Last updated", _time(resource.last_updated)),
+        )
+    )
+
+
+def format_contexts(contexts) -> str:
+    return _listing(
+        "Contexts:",
+        contexts,
+        lambda context: context.name
+        + (f" @ {context.location}" if context.location else ""),
+        "No contexts.",
+    )
+
+
+def format_context_detail(context) -> str:
+    return _detail(
+        (
+            ("Context", context.context_id),
+            ("Name", context.name),
+            ("Location", context.location),
+            ("People", ", ".join(context.people)),
+            ("Emotion", context.emotion),
+            ("Trigger", context.trigger),
+            ("Reason", context.reason),
+            ("Environment", context.environment),
+            ("Notes", context.notes),
+            ("Created", _time(context.created_at)),
+        )
+    )
+
+
+def format_knowledge(items) -> str:
+    return _listing(
+        "Knowledge:",
+        items,
+        lambda knowledge: (
+            f"{knowledge.domain}/{knowledge.topic} — {knowledge.concept} "
+            f"(confidence {knowledge.confidence:g})"
+        ),
+        "No knowledge recorded.",
+    )
+
+
+def format_knowledge_detail(knowledge) -> str:
+    return _detail(
+        (
+            ("Knowledge", knowledge.knowledge_id),
+            ("Domain", knowledge.domain),
+            ("Topic", knowledge.topic),
+            ("Concept", knowledge.concept),
+            ("Project", knowledge.project_id),
+            ("Difficulty", knowledge.difficulty),
+            ("Confidence", f"{knowledge.confidence:g}"),
+            ("Revisions", knowledge.revision_count),
+            ("Last revision", _time(knowledge.last_revision)),
+            ("Source", knowledge.source),
+            ("Applied", "yes" if knowledge.applied else "no"),
+            ("Retention", f"{knowledge.retention_score:g}"),
+        )
+    )
+
+
+def format_reflection_detail(reflection) -> str:
+    return _detail(
+        (
+            ("Reflection", reflection.reflection_id),
+            ("Event", reflection.event_id),
+            ("Context window", reflection.context_window_id),
+            ("Created", _time(reflection.created_at)),
+            ("Facts", reflection.facts),
+            ("Interpretation", reflection.interpretation),
+            ("Root cause", reflection.root_cause),
+            ("Lesson learned", reflection.lesson_learned),
+            ("Improvement", reflection.improvement),
+            (
+                "Confidence",
+                f"{reflection.confidence:g}"
+                if reflection.confidence is not None
+                else None,
+            ),
+        )
+    )
+
+
+def format_habits(habits) -> str:
+    return _listing(
+        "Habits (read-only; detected by the Learning Engine):",
+        habits,
+        lambda habit: f"{habit.name} (strength {habit.strength:g})",
+        "No habits detected.",
+    )
+
+
+def format_habit_detail(habit) -> str:
+    return _detail(
+        (
+            ("Habit", habit.habit_id),
+            ("Name", habit.name),
+            ("Detected", _time(habit.detected_at)),
+            ("Trigger", habit.trigger),
+            ("Frequency", habit.frequency),
+            ("Reward", habit.reward),
+            ("Trend", habit.current_trend),
+            ("Strength", f"{habit.strength:g}"),
+            ("Desired state", habit.desired_state),
+            ("Last updated", _time(habit.last_updated)),
+        )
+    )
+
+
+def format_insights(insights) -> str:
+    return _listing(
+        "Insights (read-only; extracted by the Learning Engine):",
+        insights,
+        lambda insight: (
+            f"[{insight.category or 'uncategorized'}] "
+            f"from reflection {insight.source_reflection_id}"
+        ),
+        "No insights extracted.",
+    )
+
+
+def format_insight_detail(insight) -> str:
+    return _detail(
+        (
+            ("Insight", insight.insight_id),
+            ("Source reflection", insight.source_reflection_id),
+            ("Category", insight.category),
+            (
+                "Confidence",
+                f"{insight.confidence:g}"
+                if insight.confidence is not None
+                else None,
+            ),
+            ("Reusable", "yes" if insight.reusable else "no"),
+            ("Created", _time(insight.created_at)),
+        )
+    )
+
+
 def format_help(specs, command: str | None = None) -> str:
     if command is not None:
         spec = specs.get(command)

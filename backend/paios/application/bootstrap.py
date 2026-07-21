@@ -15,6 +15,7 @@ from paios.runtime.clock import Clock, SystemClock
 from paios.runtime.kernel import RuntimeKernel
 from paios.scheduler.scheduler import Scheduler
 from paios.application.config import ApplicationConfig
+from paios.application.domain_operations import DomainOperations
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class Components:
     engine: DecisionEngine
     bridge: RecalculationBridge
     sync: PersistenceSync
+    operations: DomainOperations
 
 
 def build_components(config: ApplicationConfig) -> Components:
@@ -40,6 +42,7 @@ def build_components(config: ApplicationConfig) -> Components:
     engine = DecisionEngine()
     bridge = RecalculationBridge(kernel)
     sync = PersistenceSync(kernel, repositories)
+    operations = DomainOperations(repositories=repositories, now=clock.now)
     return Components(
         config=config,
         clock=clock,
@@ -49,4 +52,5 @@ def build_components(config: ApplicationConfig) -> Components:
         engine=engine,
         bridge=bridge,
         sync=sync,
+        operations=operations,
     )

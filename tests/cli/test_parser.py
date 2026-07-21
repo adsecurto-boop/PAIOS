@@ -57,7 +57,9 @@ class TestCommandRegistry:
             "resume-event", "complete-event", "cancel-event",
             "context", "projects", "reflect", "disturb", "debug", "help",
         }
-        assert expected == set(COMMAND_SPECS)
+        # Milestone 10 adds entity-management commands on top; every
+        # original mission command must remain registered unchanged.
+        assert expected <= set(COMMAND_SPECS)
 
     def test_every_spec_has_usage_and_description(self):
         for spec in COMMAND_SPECS.values():

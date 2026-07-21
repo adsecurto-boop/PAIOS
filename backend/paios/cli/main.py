@@ -6,16 +6,18 @@ auto-stop after execution; `paios shell` keeps one started Application
 alive across commands (started explicitly with `start`).
 """
 
+import shlex
 import sys
 from typing import TextIO
 
 from paios.application.application import Application
 from paios.application.config import ApplicationConfig
-from paios.cli.commands import CommandProcessor
+from paios.cli.commands import CommandProcessor, build_dashboard_config
 from paios.cli.exceptions import CliError
 from paios.cli.formatter import format_help
 from paios.cli.interactive import Shell
 from paios.cli.parser import COMMAND_SPECS, ParsedCommand, parse_line
+from paios.dashboard import Dashboard
 
 
 def _split_options(argv: list[str]) -> tuple[ApplicationConfig, list[str]]:
@@ -55,8 +57,23 @@ def main(
             application.stop()
         return 0
 
+    if arguments[0] == "dashboard":
+        try:
+            config = build_dashboard_config(arguments[1:])
+            application.start()
+            Dashboard(application, config, output_stream=out).run()
+            application.stop()
+            return 0
+        except CliError as error:
+            out.write(f"Error: {error}\n")
+            if application.started:
+                application.stop()
+            return 1
+
     try:
-        command = parse_line(" ".join(arguments))
+        # Re-quote argv tokens so multi-word arguments the OS shell already
+        # grouped survive the line-oriented parser unchanged.
+        command = parse_line(" ".join(shlex.quote(a) for a in arguments))
         if command is None:
             out.write(format_help(COMMAND_SPECS) + "\n")
             return 0

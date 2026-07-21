@@ -26,15 +26,39 @@ an undesigned future component (DOMAIN_MODEL.md Future Questions).
 from datetime import datetime
 
 from paios.decision_engine.engine import DecisionResult
+from paios.domain.entities.context import Context
 from paios.domain.entities.event_disturber import EventDisturber
+from paios.domain.entities.goal import Goal
+from paios.domain.entities.habit import Habit
+from paios.domain.entities.insight import Insight
+from paios.domain.entities.knowledge import Knowledge
+from paios.domain.entities.principle import Principle
+from paios.domain.entities.progress import Progress
+from paios.domain.entities.project import Project
 from paios.domain.entities.recommendation import Recommendation
-from paios.domain.enums import DisturberSeverity, DisturberType
+from paios.domain.entities.reflection import Reflection
+from paios.domain.entities.resource import Resource
+from paios.domain.entities.user import User
+from paios.domain.enums import (
+    DisturberSeverity,
+    DisturberType,
+    PrincipleCategory,
+    ResourceType,
+)
 from paios.domain.value_objects.event_outcome import EventOutcome
 from paios.domain.value_objects.identifiers import (
     ContextId,
     EventDisturberId,
     EventId,
+    GoalId,
+    HabitId,
+    InsightId,
+    KnowledgeId,
+    PrincipleId,
+    ProjectId,
     RecommendationId,
+    ReflectionId,
+    ResourceId,
     UserId,
 )
 from paios.runtime.runtime_snapshot import RuntimeSnapshot
@@ -96,6 +120,16 @@ class Application:
 
     def status(self) -> RuntimeStatus:
         return self._require_started().kernel.status()
+
+    def current_time(self) -> datetime:
+        """The composed Clock's now — the one sanctioned time source
+        (Milestone 11 additive query for read-only presentation)."""
+        return self._require_started().clock.now()
+
+    def scheduler_state(self):
+        """The Scheduler's lifecycle state, read-only (Milestone 11
+        additive query; pure delegation, no behavior)."""
+        return self._require_started().scheduler.state
 
     def snapshot(self) -> RuntimeSnapshot | None:
         return self._require_started().kernel.latest_snapshot
@@ -256,7 +290,238 @@ class Application:
         components.kernel.admit_event_disturber(disturber)
         return disturber
 
+    # --- domain operations (Milestone 10; pure delegation) ----------------
+    # Entity management goes application -> repositories.interfaces ->
+    # domain, bypassing the Runtime by design: aggregates written here are
+    # loaded into Runtime State at the next boot (the Kernel's repository
+    # access is confined to its boot sequence — approved resolution C5).
+    # All list/show queries below read the store, so they are always fresh.
+
+    # users
+    def add_user(self, name: str) -> User:
+        return self._operations().add_user(name)
+
+    def list_users(self) -> list[User]:
+        return self._operations().list_users()
+
+    def get_user(self, user_id: UserId) -> User:
+        return self._operations().get_user(user_id)
+
+    # goals
+    def add_goal(
+        self, user_id: UserId, name: str, description: str = ""
+    ) -> Goal:
+        return self._operations().add_goal(user_id, name, description)
+
+    def list_goals(self) -> list[Goal]:
+        return self._operations().list_goals()
+
+    def get_goal(self, goal_id: GoalId) -> Goal:
+        return self._operations().get_goal(goal_id)
+
+    def accept_goal(self, goal_id: GoalId) -> Goal:
+        return self._operations().accept_goal(goal_id)
+
+    def complete_goal(self, goal_id: GoalId) -> Goal:
+        return self._operations().complete_goal(goal_id)
+
+    def pause_goal(self, goal_id: GoalId) -> Goal:
+        return self._operations().pause_goal(goal_id)
+
+    def resume_goal(self, goal_id: GoalId) -> Goal:
+        return self._operations().resume_goal(goal_id)
+
+    # projects
+    def add_project(
+        self, user_id: UserId, name: str, description: str = ""
+    ) -> Project:
+        return self._operations().add_project(user_id, name, description)
+
+    def list_projects(self) -> list[Project]:
+        return self._operations().list_projects()
+
+    def get_project(self, project_id: ProjectId) -> Project:
+        return self._operations().get_project(project_id)
+
+    def get_project_progress(self, project_id: ProjectId) -> Progress | None:
+        return self._operations().get_project_progress(project_id)
+
+    def update_project_progress(
+        self, project_id: ProjectId, completion_percentage: float
+    ) -> Progress:
+        return self._operations().update_project_progress(
+            project_id, completion_percentage
+        )
+
+    def complete_project(self, project_id: ProjectId) -> Project:
+        return self._operations().complete_project(project_id)
+
+    def pause_project(self, project_id: ProjectId) -> Project:
+        return self._operations().pause_project(project_id)
+
+    def resume_project(self, project_id: ProjectId) -> Project:
+        return self._operations().resume_project(project_id)
+
+    # principles
+    def add_principle(
+        self, name: str, category: PrincipleCategory, description: str = ""
+    ) -> Principle:
+        return self._operations().add_principle(name, category, description)
+
+    def list_principles(self) -> list[Principle]:
+        return self._operations().list_principles()
+
+    def get_principle(self, principle_id: PrincipleId) -> Principle:
+        return self._operations().get_principle(principle_id)
+
+    def review_principle(self, principle_id: PrincipleId) -> Principle:
+        return self._operations().review_principle(principle_id)
+
+    # resources
+    def add_resource(
+        self,
+        user_id: UserId,
+        type: ResourceType,
+        current_value: float,
+        unit: str,
+        negative_allowed: bool = False,
+    ) -> Resource:
+        return self._operations().add_resource(
+            user_id, type, current_value, unit, negative_allowed
+        )
+
+    def list_resources(self) -> list[Resource]:
+        return self._operations().list_resources()
+
+    def get_resource(self, resource_id: ResourceId) -> Resource:
+        return self._operations().get_resource(resource_id)
+
+    def consume_resource(
+        self, resource_id: ResourceId, amount: float
+    ) -> Resource:
+        return self._operations().consume_resource(resource_id, amount)
+
+    def produce_resource(
+        self, resource_id: ResourceId, amount: float
+    ) -> Resource:
+        return self._operations().produce_resource(resource_id, amount)
+
+    # contexts
+    def add_context(
+        self,
+        name: str,
+        location: str | None = None,
+        people: tuple[str, ...] = (),
+        emotion: str | None = None,
+        trigger: str | None = None,
+        reason: str | None = None,
+        environment: str | None = None,
+        notes: str | None = None,
+    ) -> Context:
+        return self._operations().add_context(
+            name,
+            location=location,
+            people=people,
+            emotion=emotion,
+            trigger=trigger,
+            reason=reason,
+            environment=environment,
+            notes=notes,
+        )
+
+    def list_contexts(self) -> list[Context]:
+        return self._operations().list_contexts()
+
+    def get_context(self, context_id: ContextId) -> Context:
+        return self._operations().get_context(context_id)
+
+    # knowledge
+    def add_knowledge(
+        self,
+        user_id: UserId,
+        domain: str,
+        topic: str,
+        concept: str,
+        project_id: ProjectId | None = None,
+        difficulty: str | None = None,
+        confidence: float = 0.0,
+        source: str | None = None,
+    ) -> Knowledge:
+        return self._operations().add_knowledge(
+            user_id,
+            domain,
+            topic,
+            concept,
+            project_id=project_id,
+            difficulty=difficulty,
+            confidence=confidence,
+            source=source,
+        )
+
+    def list_knowledge(self) -> list[Knowledge]:
+        return self._operations().list_knowledge()
+
+    def get_knowledge(self, knowledge_id: KnowledgeId) -> Knowledge:
+        return self._operations().get_knowledge(knowledge_id)
+
+    def revise_knowledge(
+        self, knowledge_id: KnowledgeId, confidence: float | None = None
+    ) -> Knowledge:
+        return self._operations().revise_knowledge(
+            knowledge_id, confidence=confidence
+        )
+
+    def apply_knowledge(self, knowledge_id: KnowledgeId) -> Knowledge:
+        return self._operations().apply_knowledge(knowledge_id)
+
+    # events (read-only listing; mutation stays with the Scheduler)
+    def list_events(self) -> list:
+        return self._operations().list_events()
+
+    # reflections
+    def add_reflection(
+        self,
+        event_id: EventId,
+        facts: str | None = None,
+        interpretation: str | None = None,
+        root_cause: str | None = None,
+        lesson_learned: str | None = None,
+        improvement: str | None = None,
+        confidence: float | None = None,
+    ) -> Reflection:
+        return self._operations().add_reflection(
+            event_id,
+            facts=facts,
+            interpretation=interpretation,
+            root_cause=root_cause,
+            lesson_learned=lesson_learned,
+            improvement=improvement,
+            confidence=confidence,
+        )
+
+    def list_reflections(self) -> list[Reflection]:
+        return self._operations().list_reflections()
+
+    def get_reflection(self, reflection_id: ReflectionId) -> Reflection:
+        return self._operations().get_reflection(reflection_id)
+
+    # habits and insights (Learning Engine output; read-only)
+    def list_habits(self) -> list[Habit]:
+        return self._operations().list_habits()
+
+    def get_habit(self, habit_id: HabitId) -> Habit:
+        return self._operations().get_habit(habit_id)
+
+    def list_insights(self) -> list[Insight]:
+        return self._operations().list_insights()
+
+    def get_insight(self, insight_id: InsightId) -> Insight:
+        return self._operations().get_insight(insight_id)
+
     # --- internals --------------------------------------------------------
+
+    def _operations(self):
+        return self._require_started().operations
 
     def _require_started(self) -> Components:
         if not self._started or self._components is None:
