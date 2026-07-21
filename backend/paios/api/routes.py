@@ -12,7 +12,11 @@ module is imported.
 """
 
 from paios.application.application import Application
-from paios.domain.enums import ResourceType
+from paios.domain.enums import (
+    DisturberSeverity,
+    DisturberType,
+    ResourceType,
+)
 from paios.domain.value_objects.identifiers import (
     ContextId,
     EventId,
@@ -290,6 +294,23 @@ class ApiRouter:
         )
         return 201, serialization.serialize_reflection(reflection)
 
+    # --- disturbers (Milestone 13: the GUI's Report Disturbance) ----------
+
+    def _post_disturbers(self, params, body):
+        disturber = self._app.report_disturber(
+            self._owner(body),
+            schemas.parse_enum(
+                DisturberType, schemas.require_string(body, "type"), "type"
+            ),
+            schemas.require_string(body, "description"),
+            schemas.parse_enum(
+                DisturberSeverity,
+                schemas.require_string(body, "severity"),
+                "severity",
+            ),
+        )
+        return 201, serialization.serialize_disturber(disturber)
+
     # --- contexts --------------------------------------------------------
 
     def _get_contexts(self, params, body):
@@ -380,6 +401,7 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("POST", ("knowledge",), ApiRouter._post_knowledge),
     ("GET", ("reflections",), ApiRouter._get_reflections),
     ("POST", ("reflections",), ApiRouter._post_reflections),
+    ("POST", ("disturbers",), ApiRouter._post_disturbers),
     ("GET", ("contexts",), ApiRouter._get_contexts),
     ("GET", ("dashboard",), ApiRouter._get_dashboard),
 )

@@ -1,0 +1,2 @@
+# Desktop GUI tier only — the backend remains stdlib-only.
+PySide6-Essentials==6.9.1

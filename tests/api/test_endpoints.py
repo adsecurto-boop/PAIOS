@@ -212,6 +212,40 @@ class TestReflectionEndpoints:
         assert listing[0]["lesson_learned"] == "Short rest restores focus"
 
 
+class TestDisturberEndpoint:
+    def test_report_disturber(self, router):
+        payload = ok(
+            router,
+            "POST",
+            "/disturbers",
+            {
+                "type": "work",
+                "severity": "high",
+                "description": "Urgent call",
+            },
+        )
+        assert payload["type"] == "Work"
+        assert payload["severity"] == "High"
+        assert payload["description"] == "Urgent call"
+        # The capture chain ran; without an active window it stays
+        # Analyzed evidence (the facade's documented composition).
+        assert payload["state"] in ("Analyzed", "Applied")
+        dashboard = ok(router, "GET", "/dashboard")
+        assert any(
+            d["description"] == "Urgent call"
+            for d in dashboard["active_disturbers"]
+        )
+
+    def test_bad_enum_is_400(self, router):
+        status, payload = router.handle(
+            "POST",
+            "/disturbers",
+            {"type": "Alien", "severity": "High", "description": "x"},
+        )
+        assert status == 400
+        assert "must be one of" in payload["error"]["message"]
+
+
 class TestContextEndpoints:
     def test_list(self, router):
         contexts = ok(router, "GET", "/contexts")["contexts"]
