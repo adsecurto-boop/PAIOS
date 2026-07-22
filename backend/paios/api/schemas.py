@@ -52,6 +52,43 @@ def optional_bool(body: dict, field: str, default: bool = False) -> bool:
     return value
 
 
+def optional_datetime(body: dict, field: str):
+    """ISO-8601 datetime or None (M20)."""
+    from datetime import datetime
+
+    value = body.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ApiError(400, f"Field {field!r} must be an ISO datetime string")
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise ApiError(
+            400, f"Field {field!r} is not a valid ISO datetime: {value!r}"
+        )
+
+
+def require_string_list(body: dict, field: str) -> list[str]:
+    value = body.get(field)
+    if not isinstance(value, list) or not value or any(
+        not isinstance(item, str) for item in value
+    ):
+        raise ApiError(
+            400, f"Field {field!r} must be a non-empty list of strings"
+        )
+    return value
+
+
+def optional_object(body: dict, field: str) -> dict | None:
+    value = body.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ApiError(400, f"Field {field!r} must be a JSON object")
+    return value
+
+
 def parse_enum(enum_cls, token: str, field: str):
     """Case-insensitive enum-by-value parsing (the CLI convention)."""
     for member in enum_cls:

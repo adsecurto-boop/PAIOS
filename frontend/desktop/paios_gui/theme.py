@@ -82,7 +82,54 @@ QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
 }}
 QScrollArea {{ border: none; }}
 QStatusBar {{ color: {TEXT_DIM}; }}
+QFrame#card {{
+    background: {SURFACE};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+}}
+QFrame#card:hover {{ border-color: {ACCENT}; }}
+QFrame#nowCard {{
+    background: {SURFACE_ALT};
+    border: 1px solid {ACCENT};
+    border-radius: 6px;
+}}
+QLabel#statusChip {{
+    border-radius: 8px;
+    padding: 1px 8px;
+    font-weight: bold;
+}}
+QLabel#cardTitle {{ font-size: 14px; font-weight: bold; }}
+QLabel#cardWhy {{ color: {TEXT_DIM}; font-style: italic; }}
+QLabel#subtitle {{ color: {TEXT_DIM}; }}
+QLabel#working {{ color: {WARN}; font-weight: bold; }}
+QPlainTextEdit#captureBox {{ font-size: 15px; }}
+QPushButton#primaryAction {{
+    background: {ACCENT};
+    color: {BACKGROUND};
+    font-weight: bold;
+    padding: 6px 22px;
+}}
+QPushButton#primaryAction:hover {{ background: #6db0f0; }}
 """
+
+#: Status -> chip color (presentation of server-decided states only).
+STATUS_COLORS = {
+    "Started": GOOD,
+    "Resumed": GOOD,
+    "Ready": ACCENT,
+    "Paused": WARN,
+    "Created": TEXT_DIM,
+    "Planned": TEXT_DIM,
+    "Completed": GOOD,
+    "Cancelled": BAD,
+    "Archived": TEXT_DIM,
+    "Rejected": BAD,
+    "Expired": BAD,
+}
+
+
+def status_color(status: str) -> str:
+    return STATUS_COLORS.get(status, TEXT_DIM)
 
 
 def apply_dark_theme(app: QApplication) -> None:

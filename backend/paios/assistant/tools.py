@@ -27,6 +27,10 @@ class AssistantTask(Enum):
     MARKDOWN_SUMMARY = "MarkdownSummary"
     GENERATE_REPORT = "GenerateReport"
     ANSWER_QUESTION = "AnswerQuestion"
+    # Milestone 20 (approved): planning voices — proposal and explanation
+    # only; the assistant still never creates, mutates, or schedules.
+    CLASSIFY_CAPTURE = "ClassifyCapture"
+    EXPLAIN_DAY_PLAN = "ExplainDayPlan"
 
 
 #: task -> prompt template name (all templates exist in prompts.TEMPLATES).
@@ -45,6 +49,8 @@ TASK_TEMPLATES: dict[AssistantTask, str] = {
     AssistantTask.MARKDOWN_SUMMARY: "summarize",
     AssistantTask.GENERATE_REPORT: "summarize",
     AssistantTask.ANSWER_QUESTION: "explain",
+    AssistantTask.CLASSIFY_CAPTURE: "planning_classification",
+    AssistantTask.EXPLAIN_DAY_PLAN: "day_plan_explanation",
 }
 
 

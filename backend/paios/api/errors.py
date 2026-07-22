@@ -23,7 +23,9 @@ from paios.domain.errors import (
     InvalidTransitionError,
     InvariantViolationError,
 )
+from paios.planning.stores import PlanningStoreError
 from paios.repositories.errors import EntityNotFound, RepositoryError
+from paios.system.backup import BackupError
 
 
 class ApiError(Exception):
@@ -60,6 +62,13 @@ def translate(error: Exception) -> tuple[int, dict]:
         return error.status, payload(
             error.status, type(error).__name__, str(error)
         )
+    if isinstance(error, PlanningStoreError):
+        # Store-level identity misses read as 404, everything else as the
+        # syntax error it is (M20).
+        status = 404 if str(error).startswith("Unknown") else 400
+        return status, payload(status, type(error).__name__, str(error))
+    if isinstance(error, BackupError):
+        return 400, payload(400, type(error).__name__, str(error))
     for exception_type, status in _EXCEPTION_STATUS:
         if isinstance(error, exception_type):
             return status, payload(status, type(error).__name__, str(error))

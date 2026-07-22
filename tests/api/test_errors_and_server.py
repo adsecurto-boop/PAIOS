@@ -174,8 +174,16 @@ class TestLiveServer:
 
 class TestDelegation:
     def test_router_touches_only_the_facade(self, router):
-        # The router holds exactly one collaborator: the Application.
-        assert set(vars(router)) == {"_app"}
+        # M20 (approved): the router holds the facade plus the additive
+        # planning/backup/assistant collaborators — nothing else, and the
+        # assistant is proposal/explanation-only by construction.
+        assert set(vars(router)) == {
+            "_app",
+            "_planning",
+            "_backups",
+            "_assistant",
+            "_assistant_provider",
+        }
 
     def test_actions_delegate_to_facade_methods(self, api_app):
         calls = []
@@ -222,6 +230,13 @@ ALLOWED_PAIOS_PREFIXES = (
     "paios.domain.errors",
     "paios.domain.value_objects",
     "paios.repositories.errors",
+    # M20 (approved additive surface): planning stores/service, the
+    # assistant language layer (proposal + explanation only), and the
+    # system backup manager for the /backups wrapper. The Scheduler,
+    # Runtime, Decision Engine and Learning Engine remain forbidden.
+    "paios.planning",
+    "paios.assistant",
+    "paios.system.backup",
 )
 
 

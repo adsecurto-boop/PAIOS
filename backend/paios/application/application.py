@@ -518,6 +518,129 @@ class Application:
     def get_insight(self, insight_id: InsightId) -> Insight:
         return self._operations().get_insight(insight_id)
 
+    # --- Milestone 20 additive surface (approved 2026-07-22) ---------------
+    # Pure composition of EXISTING public calls — no frozen behavior is
+    # modified. User-authored events ride the sanctioned pipeline:
+    # Recommendation -> present -> admit (M6 surface) -> user accept ->
+    # the Scheduler consumes and materializes (G1). The Scheduler stays
+    # the only scheduling authority; these methods decide nothing.
+
+    def plan(self):
+        """The Scheduler's current SchedulingPlan, read-only (mirror of
+        the M11 ``scheduler_state`` additive query)."""
+        return self._require_started().scheduler.plan
+
+    def propose_user_event(
+        self,
+        user_id: UserId,
+        title: str,
+        suggested_time: datetime | None = None,
+        priority: float | None = None,
+        project_id: ProjectId | None = None,
+        expected_outcome: str | None = None,
+        at: datetime | None = None,
+        auto_accept: bool = True,
+        salt: str | None = None,
+    ) -> tuple[Recommendation, EventId | None]:
+        """One user intent -> one admitted Recommendation. With
+        ``auto_accept`` (the Planning UX default) the user's acceptance
+        is applied immediately, so the Scheduler's follow-up cycle
+        materializes the Event before this call returns; the resulting
+        event id is read back from the rebuilt plan (read-only lookup —
+        materialization remains entirely the Scheduler's act)."""
+        from paios.planning.intents import EventIntent, build_user_recommendation
+
+        components = self._require_started()
+        moment = self._moment(at)
+        intent = EventIntent(
+            user_id=user_id,
+            title=title,
+            suggested_time=suggested_time,
+            priority=priority,
+            project_id=project_id,
+            expected_outcome=expected_outcome,
+            salt=salt,
+        )
+        recommendation = build_user_recommendation(intent, moment)
+        recommendation.present(moment)
+        components.kernel.admit_recommendation(recommendation)
+        if auto_accept:
+            components.scheduler.accept_recommendation(
+                recommendation.recommendation_id, moment
+            )
+        return recommendation, self._materialized_event_id(recommendation)
+
+    def edit_event(
+        self,
+        event_id: EventId,
+        user_id: UserId,
+        title: str,
+        suggested_time: datetime | None = None,
+        priority: float | None = None,
+        project_id: ProjectId | None = None,
+        expected_outcome: str | None = None,
+        at: datetime | None = None,
+    ) -> tuple[Recommendation, EventId | None]:
+        """Edit = the documented composition (cancel + re-propose): the
+        Domain's Event is immutable evidence, so the original is
+        cancelled with an audit reason and a fresh intent is proposed."""
+        moment = self._moment(at)
+        self.cancel_event(
+            event_id, at=moment, reason=f"Edited: superseded by '{title}'"
+        )
+        return self.propose_user_event(
+            user_id,
+            title,
+            suggested_time=suggested_time,
+            priority=priority,
+            project_id=project_id,
+            expected_outcome=expected_outcome,
+            at=moment,
+            salt=f"edit:{event_id}",
+        )
+
+    def duplicate_event(
+        self,
+        event_id: EventId,
+        at: datetime | None = None,
+        suggested_time: datetime | None = None,
+    ) -> tuple[Recommendation, EventId | None]:
+        """Duplicate = read the source Event, propose an identical intent."""
+        source = next(
+            (
+                event
+                for event in self.list_events()
+                if event.event_id == event_id
+            ),
+            None,
+        )
+        if source is None:
+            from paios.repositories.errors import EntityNotFound
+
+            raise EntityNotFound(f"Unknown event: {event_id}")
+        return self.propose_user_event(
+            source.user_id,
+            source.description,
+            suggested_time=suggested_time,
+            project_id=source.project_id,
+            expected_outcome=source.expected_outcome,
+            at=at,
+            salt=f"duplicate:{event_id}",
+        )
+
+    def _materialized_event_id(
+        self, recommendation: Recommendation
+    ) -> EventId | None:
+        """Read-only: find the plan entry the Scheduler created for this
+        Recommendation, if its cycle has materialized one."""
+        plan = self._require_started().scheduler.plan
+        if plan is None:
+            return None
+        for entry in plan.entries:
+            if entry.recommendation_id == recommendation.recommendation_id:
+                return entry.event_id
+        return None
+
     # --- internals --------------------------------------------------------
 
     def _operations(self):

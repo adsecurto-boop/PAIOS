@@ -162,6 +162,153 @@ class ApiClient:
             {"type": type, "severity": severity, "description": description},
         )
 
+    # --- events: user-authored intents (M20) -------------------------------
+    # Creation/edit/duplicate reply with the proposed shape
+    # {"recommendation", "event_id", "materialized"} — edit is
+    # cancel+recreate on the server, so the returned event_id is NEW.
+
+    def create_event(self, title: str, **fields) -> dict:
+        body = {"title": title}
+        body.update(
+            {key: value for key, value in fields.items() if value is not None}
+        )
+        return self._request("POST", "/events", body)
+
+    def edit_event(self, event_id: str, title: str, **fields) -> dict:
+        body = {"title": title}
+        body.update(
+            {key: value for key, value in fields.items() if value is not None}
+        )
+        return self._request("PUT", f"/events/{event_id}", body)
+
+    def duplicate_event(
+        self, event_id: str, suggested_time: str | None = None
+    ) -> dict:
+        body = {} if suggested_time is None else {
+            "suggested_time": suggested_time
+        }
+        return self._request("POST", f"/events/{event_id}/duplicate", body)
+
+    def archive_event(self, event_id: str) -> dict:
+        return self._request("POST", f"/events/{event_id}/archive", {})
+
+    def get_event_metadata(self, event_id: str) -> dict:
+        return self._request("GET", f"/events/{event_id}/metadata")
+
+    def set_event_metadata(self, event_id: str, metadata: dict) -> dict:
+        return self._request("PUT", f"/events/{event_id}/metadata", metadata)
+
+    # --- plan / timeline (M20) ---------------------------------------------
+
+    def get_plan(self) -> dict:
+        return self._request("GET", "/plan")
+
+    # --- templates (M20) -----------------------------------------------------
+
+    def list_templates(self) -> list[dict]:
+        return self._request("GET", "/templates")["templates"]
+
+    def create_template(
+        self,
+        name: str,
+        title: str,
+        category: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        body = {"name": name, "title": title}
+        if category is not None:
+            body["category"] = category
+        if metadata is not None:
+            body["metadata"] = metadata
+        return self._request("POST", "/templates", body)
+
+    def delete_template(self, template_id: str) -> dict:
+        return self._request("DELETE", f"/templates/{template_id}")
+
+    def instantiate_template(
+        self,
+        template_id: str,
+        suggested_time: str | None = None,
+        priority: float | None = None,
+    ) -> dict:
+        body = {}
+        if suggested_time is not None:
+            body["suggested_time"] = suggested_time
+        if priority is not None:
+            body["priority"] = priority
+        return self._request(
+            "POST", f"/templates/{template_id}/instantiate", body
+        )
+
+    # --- recurrences (M20) ----------------------------------------------------
+
+    def list_recurrences(self) -> list[dict]:
+        return self._request("GET", "/recurrences")["recurrences"]
+
+    def create_recurrence(
+        self,
+        title: str,
+        time_of_day: str,
+        days: list[str],
+        first_run: str | None = None,
+        category: str | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        body = {"title": title, "time_of_day": time_of_day, "days": days}
+        if first_run is not None:
+            body["first_run"] = first_run
+        if category is not None:
+            body["category"] = category
+        if metadata is not None:
+            body["metadata"] = metadata
+        return self._request("POST", "/recurrences", body)
+
+    def delete_recurrence(self, recurrence_id: str) -> dict:
+        return self._request("DELETE", f"/recurrences/{recurrence_id}")
+
+    # --- inbox / quick capture (M20) --------------------------------------------
+
+    def list_inbox(self) -> list[dict]:
+        return self._request("GET", "/inbox")["items"]
+
+    def add_inbox(self, text: str) -> dict:
+        return self._request("POST", "/inbox", {"text": text})
+
+    def convert_inbox(self, item_id: str, to: str, **fields) -> dict:
+        body = {"to": to}
+        body.update(
+            {key: value for key, value in fields.items() if value is not None}
+        )
+        return self._request("POST", f"/inbox/{item_id}/convert", body)
+
+    def archive_inbox(self, item_id: str) -> dict:
+        return self._request("POST", f"/inbox/{item_id}/archive", {})
+
+    def delete_inbox(self, item_id: str) -> dict:
+        return self._request("DELETE", f"/inbox/{item_id}")
+
+    # --- assistant (M20: proposals and explanations only) ----------------------
+
+    def assistant_status(self) -> dict:
+        return self._request("GET", "/assistant/status")
+
+    def assistant_plan(self, text: str) -> dict:
+        return self._request("POST", "/assistant/plan", {"text": text})
+
+    def assistant_explain_day(self) -> dict:
+        return self._request("POST", "/assistant/explain-day", {})
+
+    # --- backups (M20) ------------------------------------------------------
+
+    def list_backups(self) -> list[dict]:
+        return self._request("GET", "/backups")["backups"]
+
+    def create_backup(self) -> dict:
+        return self._request("POST", "/backups", {})
+
+    def restore_backup(self, archive: str) -> dict:
+        return self._request("POST", "/backups/restore", {"archive": archive})
+
 
 def _response_error(error: urllib.error.HTTPError) -> ApiResponseError:
     """Decode the API's JSON error payload; degrade to the raw reason."""

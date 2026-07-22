@@ -31,6 +31,131 @@ String dayTime(String? iso) {
   return text.length >= 16 ? text.substring(0, 16) : text;
 }
 
+List<String> _listOfStrings(dynamic value) =>
+    value is List ? value.whereType<String>().toList() : const [];
+
+/// One `/plan` entry: what the scheduler intends to run and when.
+class PlanEntry {
+  final String eventId;
+  final String? plannedStart;
+  final String? plannedEnd;
+  final int? durationMinutes;
+  final double? priority;
+  final String? recommendationId;
+
+  PlanEntry.fromJson(Map<String, dynamic> json)
+      : eventId = _s(json['event_id']),
+        plannedStart = _sOrNull(json['planned_start']),
+        plannedEnd = _sOrNull(json['planned_end']),
+        durationMinutes = json['duration_minutes'] is num
+            ? _i(json['duration_minutes'])
+            : null,
+        priority = _dOrNull(json['priority']),
+        recommendationId = _sOrNull(json['recommendation_id']);
+
+  static List<PlanEntry> listFrom(dynamic payload) =>
+      payload is Map<String, dynamic>
+          ? _listOfMaps(payload['entries']).map(PlanEntry.fromJson).toList()
+          : const [];
+}
+
+/// One `/inbox` item: a raw capture awaiting triage.
+class InboxItem {
+  final String id;
+  final String text;
+  final String status; // open | converted | archived
+  final String? createdAt;
+  final String? convertedTo;
+
+  InboxItem.fromJson(Map<String, dynamic> json)
+      : id = _s(json['id']),
+        text = _s(json['text']),
+        status = _s(json['status'], 'open'),
+        createdAt = _sOrNull(json['created_at']),
+        convertedTo = _sOrNull(json['converted_to']);
+
+  static List<InboxItem> listFrom(dynamic payload) =>
+      payload is Map<String, dynamic>
+          ? _listOfMaps(payload['items']).map(InboxItem.fromJson).toList()
+          : payload is List
+              ? payload
+                  .whereType<Map<String, dynamic>>()
+                  .map(InboxItem.fromJson)
+                  .toList()
+              : const [];
+}
+
+/// The `/events/{id}/metadata` record (all fields optional).
+class EventMetadata {
+  final List<String> tags;
+  final String? deadline;
+  final String? energy; // low | medium | high
+  final int? estimatedDurationMinutes;
+  final List<String> dependsOn;
+
+  EventMetadata.fromJson(Map<String, dynamic> json)
+      : tags = _listOfStrings(json['tags']),
+        deadline = _sOrNull(json['deadline']),
+        energy = _sOrNull(json['energy']),
+        estimatedDurationMinutes = json['estimated_duration_minutes'] is num
+            ? _i(json['estimated_duration_minutes'])
+            : null,
+        dependsOn = _listOfStrings(json['depends_on']);
+
+  EventMetadata.empty()
+      : tags = const [],
+        deadline = null,
+        energy = null,
+        estimatedDurationMinutes = null,
+        dependsOn = const [];
+}
+
+/// One assistant proposal from POST /assistant/plan.
+class ProposalItem {
+  final String text;
+  final String kind; // goal | project | event | inbox
+  final String title;
+  final String? dayScope;
+  final String? duplicateOf;
+  final String? notes;
+
+  ProposalItem.fromJson(Map<String, dynamic> json)
+      : text = _s(json['text']),
+        kind = _s(json['kind'], 'inbox'),
+        title = _s(json['title'], _s(json['text'])),
+        dayScope = _sOrNull(json['day_scope']),
+        duplicateOf = _sOrNull(json['duplicate_of']),
+        notes = _sOrNull(json['notes']);
+
+  static List<ProposalItem> listFrom(dynamic payload) =>
+      payload is Map<String, dynamic>
+          ? _listOfMaps(payload['items']).map(ProposalItem.fromJson).toList()
+          : const [];
+}
+
+/// One explained plan entry from POST /assistant/explain-day.
+class DayReason {
+  final String eventId;
+  final String title;
+  final String? plannedStart;
+  final int? durationMinutes;
+  final String reason;
+
+  DayReason.fromJson(Map<String, dynamic> json)
+      : eventId = _s(json['event_id']),
+        title = _s(json['title']),
+        plannedStart = _sOrNull(json['planned_start']),
+        durationMinutes = json['duration_minutes'] is num
+            ? _i(json['duration_minutes'])
+            : null,
+        reason = _s(json['reason']);
+
+  static List<DayReason> listFrom(dynamic payload) =>
+      payload is Map<String, dynamic>
+          ? _listOfMaps(payload['entries']).map(DayReason.fromJson).toList()
+          : const [];
+}
+
 class Recommendation {
   final String id;
   final String status;

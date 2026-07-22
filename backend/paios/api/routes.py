@@ -25,8 +25,10 @@ from paios.domain.value_objects.identifiers import (
     ResourceId,
     UserId,
 )
-from paios.api import schemas, serialization
+from paios.api import assistant_support, schemas, serialization
 from paios.api.errors import ApiError, translate
+from paios.planning.service import PlanningService
+from paios.system.backup import BackupManager
 
 #: Fallback owner when the store holds no users (the CLI convention).
 DEFAULT_USER_ID = "user_001"
@@ -37,10 +39,36 @@ class ApiRouter:
 
     No sockets, no streams — the HTTP server binds this to the wire;
     tests call it directly.
+
+    M20 additive collaborators (all optional, so existing constructions
+    keep working): the PlanningService (inbox/templates/recurrences/
+    metadata), a BackupManager, and an AssistantOrchestrator (None ->
+    deterministic fallbacks answer the assistant routes).
     """
 
-    def __init__(self, application: Application) -> None:
+    def __init__(
+        self,
+        application: Application,
+        planning: PlanningService | None = None,
+        backups: BackupManager | None = None,
+        assistant=None,
+        assistant_provider: str = "none",
+    ) -> None:
         self._app = application
+        self._planning = planning
+        self._backups = backups
+        self._assistant = assistant
+        self._assistant_provider = assistant_provider
+
+    def _require_planning(self) -> PlanningService:
+        if self._planning is None:
+            raise ApiError(503, "Planning services are not composed")
+        return self._planning
+
+    def _require_backups(self) -> BackupManager:
+        if self._backups is None:
+            raise ApiError(503, "Backup services are not composed")
+        return self._backups
 
     # --- dispatch --------------------------------------------------------
 
@@ -79,7 +107,11 @@ class ApiRouter:
         return 200, snapshot
 
     def _post_tick(self, params, body):
-        return 200, serialization.serialize_decision_result(self._app.tick())
+        result = serialization.serialize_decision_result(self._app.tick())
+        # M20 additive field: due recurrence rules expand into proposed
+        # intents on the same cadence as the loop pass.
+        result["recurrences_expanded"] = self._expand_due_recurrences()
+        return 200, result
 
     # --- recommendations -------------------------------------------------
 
@@ -149,6 +181,362 @@ class ApiRouter:
         # M15 approved correction: the mobile client's Archive action.
         self._app.archive_event(EventId(params["id"]))
         return 200, {"result": "archived"}
+
+    # --- events: M20 user-authored intents ---------------------------------
+    # Creation rides the approved pipeline: intent -> Recommendation ->
+    # admit -> accept -> the Scheduler materializes. Handlers parse,
+    # delegate, serialize — the Scheduler stays the scheduling authority.
+
+    def _post_events(self, params, body):
+        title = schemas.require_string(body, "title")
+        mode = schemas.optional_string(body, "mode") or "planned"
+        metadata = schemas.optional_object(body, "metadata")
+        if mode == "now":
+            event = self._app.report_spontaneous_action(
+                self._owner(body),
+                schemas.optional_string(body, "category") or "spontaneous",
+                title,
+            )
+            self._store_metadata(str(event.event_id), metadata)
+            return 201, serialization.serialize_event(event)
+        if mode != "planned":
+            raise ApiError(400, "Field 'mode' must be 'planned' or 'now'")
+        recommendation, event_id = self._app.propose_user_event(
+            self._owner(body),
+            title,
+            suggested_time=schemas.optional_datetime(body, "suggested_time"),
+            priority=schemas.optional_number(body, "priority"),
+            project_id=self._optional_project(body),
+            expected_outcome=schemas.optional_string(body, "expected_outcome"),
+        )
+        self._store_metadata(
+            str(event_id) if event_id is not None
+            else str(recommendation.recommendation_id),
+            metadata,
+        )
+        return 201, serialization.serialize_proposed(recommendation, event_id)
+
+    def _put_event(self, params, body):
+        old_id = params["id"]
+        recommendation, event_id = self._app.edit_event(
+            EventId(old_id),
+            self._owner(body),
+            schemas.require_string(body, "title"),
+            suggested_time=schemas.optional_datetime(body, "suggested_time"),
+            priority=schemas.optional_number(body, "priority"),
+            project_id=self._optional_project(body),
+            expected_outcome=schemas.optional_string(body, "expected_outcome"),
+        )
+        if self._planning is not None:
+            new_key = (
+                str(event_id) if event_id is not None
+                else str(recommendation.recommendation_id)
+            )
+            self._planning.metadata.relink(old_id, new_key)
+            self._store_metadata(
+                new_key, schemas.optional_object(body, "metadata")
+            )
+        return 200, serialization.serialize_proposed(recommendation, event_id)
+
+    def _post_event_duplicate(self, params, body):
+        source_id = params["id"]
+        recommendation, event_id = self._app.duplicate_event(
+            EventId(source_id),
+            suggested_time=schemas.optional_datetime(body, "suggested_time"),
+        )
+        if self._planning is not None:
+            source_meta = self._planning.metadata.get(source_id)
+            if source_meta is not None:
+                copied = {
+                    field: source_meta[field]
+                    for field in self._planning.metadata.FIELDS
+                    if field in source_meta
+                }
+                self._store_metadata(
+                    str(event_id) if event_id is not None
+                    else str(recommendation.recommendation_id),
+                    copied,
+                )
+        return 201, serialization.serialize_proposed(recommendation, event_id)
+
+    def _get_event_metadata(self, params, body):
+        record = self._require_planning().metadata.resolve(params["id"])
+        return 200, record if record is not None else {"key": params["id"]}
+
+    def _put_event_metadata(self, params, body):
+        record = self._require_planning().metadata.set(
+            params["id"], schemas.body_object(body), self._app.current_time()
+        )
+        return 200, record
+
+    # --- plan / timeline (M20) ---------------------------------------------
+
+    def _get_plan(self, params, body):
+        return 200, serialization.serialize_plan(self._app.plan())
+
+    # --- templates (M20) -----------------------------------------------------
+
+    def _get_templates(self, params, body):
+        return 200, {"templates": self._require_planning().templates.list()}
+
+    def _post_templates(self, params, body):
+        record = self._require_planning().templates.add(
+            schemas.require_string(body, "name"),
+            schemas.require_string(body, "title"),
+            self._app.current_time(),
+            category=schemas.optional_string(body, "category") or "planned",
+            metadata=schemas.optional_object(body, "metadata"),
+        )
+        return 201, record
+
+    def _delete_template(self, params, body):
+        self._require_planning().templates.delete(params["id"])
+        return 200, {"result": "deleted"}
+
+    def _post_template_instantiate(self, params, body):
+        planning = self._require_planning()
+        intent, default_metadata = planning.instantiate_template(
+            params["id"],
+            self._owner(body),
+            schemas.optional_datetime(body, "suggested_time"),
+            priority=schemas.optional_number(body, "priority"),
+        )
+        recommendation, event_id = self._app.propose_user_event(
+            intent.user_id,
+            intent.title,
+            suggested_time=intent.suggested_time,
+            priority=intent.priority,
+        )
+        self._store_metadata(
+            str(event_id) if event_id is not None
+            else str(recommendation.recommendation_id),
+            default_metadata or None,
+        )
+        return 201, serialization.serialize_proposed(recommendation, event_id)
+
+    # --- recurrences (M20) ----------------------------------------------------
+
+    def _get_recurrences(self, params, body):
+        return 200, {
+            "recurrences": self._require_planning().recurrences.list()
+        }
+
+    def _post_recurrences(self, params, body):
+        planning = self._require_planning()
+        now = self._app.current_time()
+        explicit_first = schemas.optional_datetime(body, "first_run")
+        record = planning.recurrences.add(
+            schemas.require_string(body, "title"),
+            schemas.require_string(body, "time_of_day"),
+            schemas.require_string_list(body, "days"),
+            explicit_first if explicit_first is not None else now,
+            now,
+            category=schemas.optional_string(body, "category") or "recurring",
+            metadata=schemas.optional_object(body, "metadata"),
+        )
+        if explicit_first is None:
+            record = planning.recurrences.set_next_run(
+                record["id"], planning.next_occurrence(record, now)
+            )
+        return 201, record
+
+    def _delete_recurrence(self, params, body):
+        self._require_planning().recurrences.delete(params["id"])
+        return 200, {"result": "deleted"}
+
+    # --- inbox / quick capture (M20) --------------------------------------------
+
+    def _get_inbox(self, params, body):
+        return 200, {"items": self._require_planning().inbox.list()}
+
+    def _post_inbox(self, params, body):
+        record = self._require_planning().inbox.add(
+            schemas.require_string(body, "text"), self._app.current_time()
+        )
+        return 201, record
+
+    def _post_inbox_convert(self, params, body):
+        planning = self._require_planning()
+        item = planning.inbox.get(params["id"])
+        target = schemas.require_string(body, "to").lower()
+        title = schemas.optional_string(body, "title") or item["text"]
+        now = self._app.current_time()
+        if target == "goal":
+            goal = self._app.add_goal(self._owner(body), title, "")
+            created = serialization.serialize_goal(goal)
+            reference = f"goal:{goal.goal_id}"
+        elif target == "project":
+            project = self._app.add_project(self._owner(body), title, "")
+            created = serialization.serialize_project(
+                project, self._app.get_project_progress(project.project_id)
+            )
+            reference = f"project:{project.project_id}"
+        elif target == "event":
+            recommendation, event_id = self._app.propose_user_event(
+                self._owner(body),
+                title,
+                suggested_time=schemas.optional_datetime(
+                    body, "suggested_time"
+                ),
+                priority=schemas.optional_number(body, "priority"),
+            )
+            created = serialization.serialize_proposed(
+                recommendation, event_id
+            )
+            reference = "event:" + (
+                str(event_id) if event_id is not None
+                else str(recommendation.recommendation_id)
+            )
+            self._store_metadata(
+                reference.removeprefix("event:"),
+                schemas.optional_object(body, "metadata"),
+            )
+        else:
+            raise ApiError(
+                400, "Field 'to' must be 'goal', 'project' or 'event'"
+            )
+        record = planning.inbox.mark_converted(params["id"], reference, now)
+        return 200, {"item": record, "created": created}
+
+    def _post_inbox_archive(self, params, body):
+        record = self._require_planning().inbox.archive(
+            params["id"], self._app.current_time()
+        )
+        return 200, record
+
+    def _delete_inbox(self, params, body):
+        self._require_planning().inbox.delete(params["id"])
+        return 200, {"result": "deleted"}
+
+    # --- assistant (M20: proposals and explanations ONLY) ----------------------
+
+    def _get_assistant_status(self, params, body):
+        return 200, {
+            "provider": self._assistant_provider,
+            "available": self._assistant is not None,
+            "fallback": "heuristic",
+        }
+
+    def _post_assistant_plan(self, params, body):
+        text = schemas.require_string(body, "text")
+        goals = tuple(goal.name for goal in self._app.list_goals())
+        projects = tuple(
+            project.name for project in self._app.list_projects()
+        )
+        events = tuple(
+            event.description
+            for event in self._app.list_events()
+            if getattr(event.status, "value", str(event.status)) != "Archived"
+        )[:200]
+        if self._assistant is not None:
+            try:
+                proposal = self._assistant.classify_captures(
+                    text,
+                    existing_goals=goals,
+                    existing_projects=projects,
+                    existing_events=events,
+                )
+                return 200, assistant_support.proposal_payload(proposal)
+            except assistant_support.FALLBACK_ERRORS:
+                pass  # deterministic path answers instead
+        return 200, assistant_support.heuristic_proposal_payload(
+            text, goals, projects, events
+        )
+
+    def _post_assistant_explain_day(self, params, body):
+        planning = self._require_planning()
+        entries = assistant_support.deterministic_day_reasons(
+            self._app, planning
+        )
+        payload = {"source": "deterministic", "entries": entries}
+        if self._assistant is not None and entries:
+            plan_lines = [
+                f"{entry['planned_start']} {entry['title']} "
+                f"({entry['duration_minutes']}m)"
+                for entry in entries
+            ]
+            facts = [
+                f"{entry['title']}: {entry['reason']}" for entry in entries
+            ]
+            try:
+                result = self._assistant.explain_day_plan(plan_lines, facts)
+                payload = {
+                    "source": "llm",
+                    "answer": result.answer,
+                    "bullets": list(result.bullets),
+                    "entries": entries,
+                }
+            except assistant_support.FALLBACK_ERRORS:
+                pass
+        return 200, payload
+
+    # --- backups (M20: wraps the existing system BackupManager) ----------------
+
+    def _get_backups(self, params, body):
+        archives = self._require_backups().list_backups()
+        return 200, {
+            "backups": [
+                {"name": archive.name, "size_bytes": archive.stat().st_size}
+                for archive in archives
+            ]
+        }
+
+    def _post_backups(self, params, body):
+        archive = self._require_backups().create(
+            now=self._app.current_time()
+        )
+        return 201, {"name": archive.name}
+
+    def _post_backups_restore(self, params, body):
+        restored = self._require_backups().restore(
+            schemas.require_string(body, "archive")
+        )
+        return 200, {
+            "restored": restored,
+            "note": (
+                "Restored files load at the next application start; "
+                "restart PAIOS to adopt them."
+            ),
+        }
+
+    # --- M20 shared helpers -----------------------------------------------------
+
+    def _store_metadata(self, key: str, metadata) -> None:
+        if metadata and self._planning is not None:
+            self._planning.metadata.set(
+                key, metadata, self._app.current_time()
+            )
+
+    def _optional_project(self, body):
+        token = schemas.optional_string(body, "project_id")
+        return ProjectId(token) if token is not None else None
+
+    def _expand_due_recurrences(self) -> int:
+        """Called from POST /tick when planning is composed: each due
+        rule becomes one proposed intent; the rule then advances. The
+        Scheduler decides everything about the resulting Event."""
+        if self._planning is None:
+            return 0
+        now = self._app.current_time()
+        owner = self._owner({})
+        expanded = 0
+        for rule in self._planning.due_recurrences(now):
+            intent, default_metadata, next_run = (
+                self._planning.expand_recurrence(rule, owner, now)
+            )
+            recommendation, event_id = self._app.propose_user_event(
+                intent.user_id,
+                intent.title,
+                suggested_time=intent.suggested_time,
+            )
+            self._store_metadata(
+                str(event_id) if event_id is not None
+                else str(recommendation.recommendation_id),
+                default_metadata or None,
+            )
+            self._planning.recurrences.set_next_run(rule["id"], next_run)
+            expanded += 1
+        return expanded
 
     # --- goals -----------------------------------------------------------
 
@@ -369,7 +757,16 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
         ApiRouter._post_recommendation_reject,
     ),
     ("GET", ("events",), ApiRouter._get_events),
+    ("POST", ("events",), ApiRouter._post_events),
     ("GET", ("events", "{id}"), ApiRouter._get_event),
+    ("PUT", ("events", "{id}"), ApiRouter._put_event),
+    (
+        "POST",
+        ("events", "{id}", "duplicate"),
+        ApiRouter._post_event_duplicate,
+    ),
+    ("GET", ("events", "{id}", "metadata"), ApiRouter._get_event_metadata),
+    ("PUT", ("events", "{id}", "metadata"), ApiRouter._put_event_metadata),
     ("POST", ("events", "{id}", "start"), ApiRouter._post_event_start),
     ("POST", ("events", "{id}", "pause"), ApiRouter._post_event_pause),
     ("POST", ("events", "{id}", "resume"), ApiRouter._post_event_resume),
@@ -407,4 +804,32 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("POST", ("disturbers",), ApiRouter._post_disturbers),
     ("GET", ("contexts",), ApiRouter._get_contexts),
     ("GET", ("dashboard",), ApiRouter._get_dashboard),
+    # --- Milestone 20 additive routes (approved 2026-07-22) ---------------
+    ("GET", ("plan",), ApiRouter._get_plan),
+    ("GET", ("templates",), ApiRouter._get_templates),
+    ("POST", ("templates",), ApiRouter._post_templates),
+    ("DELETE", ("templates", "{id}"), ApiRouter._delete_template),
+    (
+        "POST",
+        ("templates", "{id}", "instantiate"),
+        ApiRouter._post_template_instantiate,
+    ),
+    ("GET", ("recurrences",), ApiRouter._get_recurrences),
+    ("POST", ("recurrences",), ApiRouter._post_recurrences),
+    ("DELETE", ("recurrences", "{id}"), ApiRouter._delete_recurrence),
+    ("GET", ("inbox",), ApiRouter._get_inbox),
+    ("POST", ("inbox",), ApiRouter._post_inbox),
+    ("POST", ("inbox", "{id}", "convert"), ApiRouter._post_inbox_convert),
+    ("POST", ("inbox", "{id}", "archive"), ApiRouter._post_inbox_archive),
+    ("DELETE", ("inbox", "{id}"), ApiRouter._delete_inbox),
+    ("GET", ("assistant", "status"), ApiRouter._get_assistant_status),
+    ("POST", ("assistant", "plan"), ApiRouter._post_assistant_plan),
+    (
+        "POST",
+        ("assistant", "explain-day"),
+        ApiRouter._post_assistant_explain_day,
+    ),
+    ("GET", ("backups",), ApiRouter._get_backups),
+    ("POST", ("backups",), ApiRouter._post_backups),
+    ("POST", ("backups", "restore"), ApiRouter._post_backups_restore),
 )

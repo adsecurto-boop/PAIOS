@@ -19,10 +19,8 @@ from paios_gui import format as fmt
 from paios_gui.config import MAX_REFRESH_SECONDS, MIN_REFRESH_SECONDS
 from paios_gui.dialogs import (
     NameDescriptionDialog,
-    OutcomeDialog,
     ProgressDialog,
-    ReasonDialog,
-    ReflectionDialog,
+    confirm,
 )
 
 #: Event states shown on the History page (terminal states — the same
@@ -31,21 +29,32 @@ _HISTORY_STATES = ("Completed", "Cancelled", "Archived", "Rejected", "Expired")
 
 
 class TablePage(QWidget):
-    """A titled table + toolbar; subclasses define columns and rows."""
+    """A titled table + toolbar; subclasses define columns and rows.
+
+    Two shared presentation aids (M20): an empty-state hint shown when
+    the fetch returns no rows, and a substring filter (the window's
+    toolbar search) that hides non-matching rows — display only, the
+    fetched data is untouched."""
 
     title = ""
     columns: tuple[str, ...] = ()
+    empty_hint = "Nothing here yet."
 
     def __init__(self, window) -> None:
         super().__init__()
         self._window = window
         self._rows: list[dict] = []
+        self._filter = ""
         layout = QVBoxLayout(self)
         heading = QLabel(self.title.upper())
         heading.setObjectName("sectionTitle")
         layout.addWidget(heading)
         self.toolbar = QHBoxLayout()
         layout.addLayout(self.toolbar)
+        self.empty_label = QLabel(self.empty_hint)
+        self.empty_label.setWordWrap(True)
+        self.empty_label.hide()
+        layout.addWidget(self.empty_label)
         self.table = QTableWidget(0, len(self.columns))
         self.table.setHorizontalHeaderLabels(list(self.columns))
         self.table.setSelectionBehavior(
@@ -79,6 +88,21 @@ class TablePage(QWidget):
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
                 )
                 self.table.setItem(row_index, column_index, item)
+        self.empty_label.setVisible(not self._rows)
+        self._apply_row_filter()
+
+    # --- search filter (presentation only) --------------------------------
+
+    def apply_filter(self, text: str) -> None:
+        self._filter = text.strip().lower()
+        self._apply_row_filter()
+
+    def _apply_row_filter(self) -> None:
+        for row_index, row in enumerate(self._rows):
+            matches = not self._filter or any(
+                self._filter in value.lower() for value in self.cells(row)
+            )
+            self.table.setRowHidden(row_index, not matches)
 
     def fetch(self, client) -> list[dict]:
         raise NotImplementedError
@@ -175,87 +199,6 @@ class ProjectsPage(TablePage):
                     row["project_id"], percentage
                 ),
                 f"Progress updated: {row['name']} -> {percentage:.0f}%",
-            )
-
-
-class EventsPage(TablePage):
-    title = "Events"
-    columns = ("Description", "Category", "Status", "Start", "Duration")
-
-    def _build_toolbar(self) -> None:
-        self._add_button("Start", self._simple("start_event", "Event started"))
-        self._add_button("Pause", self._simple("pause_event", "Event paused"))
-        self._add_button(
-            "Resume", self._simple("resume_event", "Event resumed")
-        )
-        self._add_button("Complete…", self._on_complete)
-        self._add_button("Cancel…", self._on_cancel)
-        self._add_button("Reflect…", self._on_reflect)
-
-    def fetch(self, client):
-        return client.get_events()
-
-    def cells(self, row):
-        return (
-            row["description"],
-            fmt.text_or_dash(row["category"]),
-            row["status"],
-            fmt.day_time(row["start_time"]),
-            fmt.minutes(row["duration_minutes"]),
-        )
-
-    def _simple(self, method_name: str, notice: str):
-        def handler() -> None:
-            row = self._require_selection()
-            if row is None:
-                return
-            client_method = getattr(self._window.client, method_name)
-            self._window.run_action(
-                lambda: client_method(row["event_id"]), notice
-            )
-
-        return handler
-
-    def _on_complete(self) -> None:
-        row = self._require_selection()
-        if row is None:
-            return
-        dialog = OutcomeDialog(self)
-        if dialog.exec():
-            outcome = dialog.values()["actual_outcome"]
-            self._window.run_action(
-                lambda: self._window.client.complete_event(
-                    row["event_id"], outcome
-                ),
-                "Event completed",
-            )
-
-    def _on_cancel(self) -> None:
-        row = self._require_selection()
-        if row is None:
-            return
-        dialog = ReasonDialog("Cancel event", "Reason (optional)", self)
-        if dialog.exec():
-            reason = dialog.values()["reason"]
-            self._window.run_action(
-                lambda: self._window.client.cancel_event(
-                    row["event_id"], reason
-                ),
-                "Event cancelled",
-            )
-
-    def _on_reflect(self) -> None:
-        row = self._require_selection()
-        if row is None:
-            return
-        dialog = ReflectionDialog(row["description"], self)
-        if dialog.exec():
-            values = dialog.values()
-            self._window.run_action(
-                lambda: self._window.client.create_reflection(
-                    row["event_id"], **values
-                ),
-                "Reflection recorded",
             )
 
 
@@ -391,6 +334,49 @@ class NotificationsPage(TablePage):
         self._window.refresh_now()
 
 
+
+class BackupsPage(TablePage):
+    """Backup manager (M20): list archives, create one, restore one.
+    Restore only unpacks files — the server adopts them at its next
+    start, which the confirm dialog spells out."""
+
+    title = "Backups"
+    columns = ("Archive", "Size")
+    empty_hint = "No backups yet. Create one with the button above."
+
+    def _build_toolbar(self) -> None:
+        self._add_button("Create backup", self._on_create)
+        self._add_button("Restore…", self._on_restore)
+
+    def fetch(self, client):
+        return client.list_backups()
+
+    def cells(self, row):
+        return (row["name"], f"{row['size_bytes']:,} bytes")
+
+    def _on_create(self) -> None:
+        self._window.run_action(
+            lambda: self._window.client.create_backup(),
+            "Backup created",
+        )
+
+    def _on_restore(self) -> None:
+        row = self._require_selection()
+        if row is None:
+            return
+        if not confirm(
+            self,
+            "Restore backup",
+            f"Restore '{row['name']}'? Restored files load at the next"
+            " application start — restart PAIOS afterwards to adopt them.",
+        ):
+            return
+        self._window.run_action(
+            lambda: self._window.client.restore_backup(row["name"]),
+            f"Backup restored: {row['name']} (restart PAIOS to adopt)",
+        )
+
+
 class SettingsPage(QWidget):
     """Refresh interval (the configurable poll) and connection info."""
 
@@ -419,7 +405,8 @@ class SettingsPage(QWidget):
         layout.addWidget(
             QLabel(
                 "Shortcuts: F5 / Ctrl+R refresh · Ctrl+1…Ctrl+9 pages"
-                " · Ctrl+Q quit"
+                " · Ctrl+N new event · Ctrl+I inbox capture"
+                " · Ctrl+P planning · Ctrl+F search · Ctrl+Q quit"
             )
         )
         layout.addStretch(1)

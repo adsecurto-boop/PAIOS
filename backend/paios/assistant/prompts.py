@@ -124,6 +124,53 @@ LEARNING_EXPLANATION = PromptTemplate(
     ),
 )
 
+#: Milestone 20: the planning-proposal reply contract. Distinct from
+#: RESPONSE_CONTRACT because a proposal is structured items, not prose;
+#: response_parser.parse_planning_response enforces it.
+PLANNING_CONTRACT = (
+    'Respond with ONLY a JSON object, no other text: {"answer": "<one '
+    'sentence describing the proposal>", "items": [{"text": "<the '
+    'original line>", "kind": "goal"|"project"|"event"|"inbox", '
+    '"title": "<clean title>", "day_scope": "<day word or null>", '
+    '"duplicate_of": "<existing name or null>", "notes": "<short '
+    'rationale>"}, ...], "questions": ["<clarification question>", '
+    '...], "confidence": <0.0-1.0>}'
+)
+
+PLANNING_CLASSIFICATION = PromptTemplate(
+    name="planning_classification",
+    system=(
+        "You are the PAIOS planning assistant. You ONLY classify the "
+        "user's captured lines and propose a plan structure — you never "
+        "create anything, never schedule anything, and never claim an "
+        "action happened. The PAIOS Scheduler is the sole scheduling "
+        "authority; your output is a proposal the user must approve. "
+        "Classify each line as goal (long-running aspiration), project "
+        "(multi-step buildable work), event (single concrete action) or "
+        "inbox (unclear — needs triage). Mark duplicates of existing "
+        "work. Ask a clarification question when a line is ambiguous. "
+    ) + PLANNING_CONTRACT,
+    user_template=(
+        "Captured lines:\n{captures}\n\nExisting goals:\n{goals}\n\n"
+        "Existing projects:\n{projects}\n\nExisting events:\n{events}"
+    ),
+)
+
+DAY_PLAN_EXPLANATION = PromptTemplate(
+    name="day_plan_explanation",
+    system=_SHARED_RULES + (
+        " You are explaining a schedule the PAIOS Scheduler already "
+        "produced. Give one short WHY per plan entry, grounded ONLY in "
+        "the supplied facts (priority, deadline, energy, dependencies, "
+        "recommendation reasons). Never propose reordering; the "
+        "Scheduler and Decision Engine already decided."
+    ),
+    user_template=(
+        "Today's plan (in scheduled order):\n{plan}\n\n"
+        "Supporting facts:\n{context}"
+    ),
+)
+
 #: Registry: template name -> template (fixed, ordered by name).
 TEMPLATES: dict[str, PromptTemplate] = {
     template.name: template
@@ -135,5 +182,7 @@ TEMPLATES: dict[str, PromptTemplate] = {
         RECOMMENDATION_EXPLANATION,
         PROJECT_EXPLANATION,
         LEARNING_EXPLANATION,
+        PLANNING_CLASSIFICATION,
+        DAY_PLAN_EXPLANATION,
     )
 }

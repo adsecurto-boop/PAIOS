@@ -16,14 +16,18 @@ import 'fixtures.dart';
 
 class RequestLog {
   final List<String> requests = [];
+  final List<String> bodies = []; // POST/PUT payloads, in request order
 }
 
 ApiClient Function(String) mockFactory(RequestLog log,
-    {bool offline = false}) {
+    {bool offline = false, List<Map<String, dynamic>>? events}) {
   return (url) => ApiClient(url,
       client: MockClient((request) async {
         if (offline) throw http.ClientException('connection refused');
         log.requests.add('${request.method} ${request.url.path}');
+        if (request.method == 'POST' || request.method == 'PUT') {
+          log.bodies.add(request.body);
+        }
         final path = request.url.path;
         if (path == '/dashboard') {
           return http.Response(jsonEncode(dashboardJson()), 200);
@@ -32,8 +36,9 @@ ApiClient Function(String) mockFactory(RequestLog log,
           return http.Response(
               jsonEncode({'resources': resourcesJson()}), 200);
         }
-        if (path == '/events') {
-          return http.Response(jsonEncode({'events': eventsJson()}), 200);
+        if (path == '/events' && request.method == 'GET') {
+          return http.Response(
+              jsonEncode({'events': events ?? eventsJson()}), 200);
         }
         if (path == '/recommendations') {
           return http.Response(
@@ -43,7 +48,34 @@ ApiClient Function(String) mockFactory(RequestLog log,
               }),
               200);
         }
-        if (request.method == 'POST') {
+        // --- M20 routes -----------------------------------------------------
+        if (path == '/plan') {
+          return http.Response(jsonEncode(planJson()), 200);
+        }
+        if (path == '/inbox' && request.method == 'GET') {
+          return http.Response(jsonEncode(inboxJson()), 200);
+        }
+        if (path == '/templates') {
+          return http.Response(jsonEncode(templatesJson()), 200);
+        }
+        if (path == '/assistant/status') {
+          return http.Response(jsonEncode(assistantStatusJson()), 200);
+        }
+        if (path == '/assistant/plan') {
+          return http.Response(jsonEncode(assistantPlanJson()), 200);
+        }
+        if (path == '/assistant/explain-day') {
+          return http.Response(jsonEncode(assistantExplainJson()), 200);
+        }
+        if (path == '/events/e1/metadata' && request.method == 'GET') {
+          return http.Response(jsonEncode(eventMetadataJson()), 200);
+        }
+        if (path == '/events' && request.method == 'POST') {
+          return http.Response(jsonEncode(createEventResponseJson()), 201);
+        }
+        if (request.method == 'POST' ||
+            request.method == 'PUT' ||
+            request.method == 'DELETE') {
           return http.Response(jsonEncode({'result': 'ok'}), 200);
         }
         return http.Response(
@@ -72,6 +104,11 @@ void main() {
     await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
     await tester.pumpAndSettle();
 
+    // M20: Planning is the initial screen; hop to Dashboard first
+    // (wide surface, so the NavigationRail label is tappable directly).
+    await tester.tap(find.text('Dashboard'));
+    await tester.pumpAndSettle();
+
     for (final title in [
       'TIME', 'STATUS', 'CURRENT EVENT', 'CURRENT CONTEXT', 'GOALS',
       'PROJECTS', 'RECOMMENDATIONS', 'HEALTH', 'RESOURCES', 'LEARNING',
@@ -91,8 +128,8 @@ void main() {
     await tester.pumpAndSettle();
 
     for (final title in [
-      'Recommendations', 'Events', 'Goals', 'Projects', 'Contexts',
-      'Resources', 'Reflections', 'Settings',
+      'Timeline', 'Quick Capture', 'Recommendations', 'Events', 'Goals',
+      'Projects', 'Contexts', 'Resources', 'Reflections', 'Settings',
     ]) {
       await tester.tap(find.byTooltip('Open navigation menu'));
       await tester.pumpAndSettle();

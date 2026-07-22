@@ -93,8 +93,17 @@ def _split_options(
     system = replace(
         system, data_dir=effective_data_dir, log_dir=effective_log_dir
     )
+    # M20: every product surface schedules with the MetadataPlanner
+    # (durations/deadlines/dependencies from the planning sidecar) —
+    # injected through the Scheduler's existing R3 constructor seam.
+    from paios.planning.metadata_planner import MetadataPlanner
+    from paios.planning.stores import EventMetadataStore
+
+    planner = MetadataPlanner(
+        EventMetadataStore(Path(effective_data_dir) / "planning")
+    )
     return (
-        ApplicationConfig(data_dir=effective_data_dir),
+        ApplicationConfig(data_dir=effective_data_dir, planner=planner),
         NotificationConfig(
             quiet_hours=quiet_hours,
             cooldown_seconds=system.notification_cooldown_seconds,

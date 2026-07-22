@@ -15,6 +15,7 @@ from tests.gui.test_client import drive_event_via_rest
 
 class TestDashboard:
     def test_refresh_fills_every_section(self, window):
+        window.navigation.setCurrentRow(3)  # Dashboard (Planning starts)
         window.refresh_now()
         assert window.online is True
         sections = window.dashboard.sections
@@ -49,16 +50,21 @@ class TestNavigation:
         # "Notifications (1)" after the connect notice — strip it.
         normalized = [name.split(" (")[0] for name in names]
         assert normalized == [
-            "Dashboard", "Goals", "Projects", "Events", "Resources",
-            "Knowledge", "Learning", "History", "Notifications",
-            "Settings", "Refresh",
+            "Planning", "Timeline", "Inbox", "Dashboard", "Goals",
+            "Projects", "Events", "Resources", "Knowledge", "Learning",
+            "History", "Backups", "Logs", "Notifications", "Settings",
+            "Refresh",
         ]
-        for row in range(10):
+        for row in range(15):
             window.navigation.setCurrentRow(row)
             assert window.pages.currentIndex() == row
         # The trailing Refresh entry refreshes and bounces back.
-        window.navigation.setCurrentRow(10)
-        assert window.pages.currentIndex() == 9
+        window.navigation.setCurrentRow(15)
+        assert window.pages.currentIndex() == 14
+
+    def test_planning_is_the_startup_page(self, window):
+        assert window.pages.currentIndex() == 0
+        assert window.current_page() is window.planning
 
     def test_shortcut_objects_installed(self, window):
         from PySide6.QtGui import QShortcut
@@ -67,7 +73,10 @@ class TestNavigation:
             shortcut.key().toString()
             for shortcut in window.findChildren(QShortcut)
         }
-        assert {"F5", "Ctrl+R", "Ctrl+1", "Ctrl+9"} <= sequences
+        assert {
+            "F5", "Ctrl+R", "Ctrl+1", "Ctrl+9",
+            "Ctrl+N", "Ctrl+I", "Ctrl+P", "Ctrl+F",
+        } <= sequences
 
 
 class TestActions:
@@ -77,7 +86,7 @@ class TestActions:
             "Goal created: Ship GUI",
         )
         assert window.online is True
-        goals_page = window._page_list[1][1]
+        goals_page = window._page_list[4][1]  # Goals
         goals_page.refresh(window.client)
         names = [row["name"] for row in goals_page._rows]
         assert "Ship GUI" in names
@@ -87,13 +96,13 @@ class TestActions:
 
     def test_event_lifecycle_from_events_page(self, window, client):
         event_id = drive_event_via_rest(client)
-        window.navigation.setCurrentRow(3)  # Events
+        window.navigation.setCurrentRow(6)  # Events
         events_page = window.current_page()
         assert any(row["event_id"] == event_id for row in events_page._rows)
         window.run_action(
             lambda: client.start_event(event_id), "Event started"
         )
-        window.navigation.setCurrentRow(0)
+        window.navigation.setCurrentRow(3)  # Dashboard
         window.refresh_now()
         current = window.dashboard.sections["Current Event"].body_text()
         assert "Idle" not in current
@@ -117,6 +126,7 @@ class TestActions:
             lambda: window.client.report_disturber(**values),
             "Disturbance reported",
         )
+        window.navigation.setCurrentRow(3)  # Dashboard (Planning starts)
         window.refresh_now()
         disturbers = window.dashboard.sections["Disturbers"].body_text()
         assert "Phone call" in disturbers

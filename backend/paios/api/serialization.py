@@ -89,6 +89,40 @@ def serialize_decision_result(result) -> dict:
     }
 
 
+# --- plan (M20) -------------------------------------------------------------
+
+
+def serialize_plan(plan) -> dict:
+    """SchedulingPlan -> JSON. Read-only Scheduler output; the timeline's
+    data source."""
+    if plan is None:
+        return {"created_at": None, "entries": []}
+    return {
+        "created_at": _iso(plan.created_at),
+        "entries": [
+            {
+                "event_id": _identifier(entry.event_id),
+                "planned_start": _iso(entry.planned_start),
+                "planned_end": _iso(entry.planned_end),
+                "duration_minutes": entry.duration_minutes,
+                "priority": entry.priority,
+                "recommendation_id": _identifier(entry.recommendation_id),
+            }
+            for entry in plan.entries
+        ],
+    }
+
+
+def serialize_proposed(recommendation, event_id) -> dict:
+    """The POST /events reply: the admitted intent plus the materialized
+    event id when the Scheduler's cycle already produced one."""
+    return {
+        "recommendation": serialize_recommendation(recommendation),
+        "event_id": _identifier(event_id),
+        "materialized": event_id is not None,
+    }
+
+
 # --- aggregates -----------------------------------------------------------
 
 

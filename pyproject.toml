@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paios"
-version = "1.7.0"
+version = "2.2.0"
 description = "PAIOS - Personal AI Operating System"
 requires-python = ">=3.12"
 # The backend is deliberately dependency-free (stdlib only).
@@ -26,15 +26,18 @@ paios-gui = "paios_gui.app:main"
 paios-launcher = "paios_launcher.app:main"
 
 [tool.setuptools.packages.find]
-where = ["backend", "frontend/desktop", "launcher"]
-include = ["paios*", "paios_gui*", "paios_launcher*"]
+where = ["backend", "frontend/desktop", "launcher", "updater"]
+include = ["paios*", "paios_gui*", "paios_launcher*", "paios_updater*"]
 
 [tool.setuptools.package-dir]
 paios = "backend/paios"
 paios_gui = "frontend/desktop/paios_gui"
 paios_launcher = "launcher/paios_launcher"
+paios_updater = "updater/paios_updater"
 
 [tool.pytest.ini_options]
 # installer/ ships in PAIOSSetup.exe, not in the wheel — pytest-only path.
-pythonpath = ["backend", "frontend/desktop", "launcher", "installer", "."]
+pythonpath = [
+    "backend", "frontend/desktop", "launcher", "installer", "updater", ".",
+]
 testpaths = ["tests"]

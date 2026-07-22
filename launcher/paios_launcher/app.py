@@ -225,10 +225,42 @@ def run_headless(
 class TrayController:
     """Bridges tray menu intents to the supervisor (and the desktop)."""
 
-    def __init__(self, supervisor: Supervisor, system: SystemConfig, app) -> None:
+    def __init__(
+        self,
+        supervisor: Supervisor,
+        system: SystemConfig,
+        app,
+        update_checker=None,
+    ) -> None:
         self._supervisor = supervisor
         self._system = system
         self._app = app
+        # M20: injected checker (None in tests keeps the tray silent).
+        self._update_checker = update_checker
+        self.on_update_available = None  # tray hook, set by run_tray
+
+    # --- updates (M20: check + notify only; installing is the updater's job)
+
+    def check_for_updates(self) -> None:
+        if self._update_checker is None:
+            return
+        found = self._update_checker.check()
+        if found is not None and self.on_update_available is not None:
+            self.on_update_available(found)
+
+    def update_available(self):
+        if self._update_checker is None:
+            return None
+        return self._update_checker.available
+
+    def install_update(self) -> None:
+        """Hand over to PAIOSUpdater.exe and exit — the updater stops,
+        replaces and restarts PAIOS; the launcher must not linger."""
+        from paios_launcher.update_check import launch_updater
+
+        if launch_updater(install_dir()):
+            logger.info("updater launched; exiting for file replacement")
+            self._app.quit()
 
     def overall_state(self) -> str:
         return self._supervisor.overall_state()
@@ -278,12 +310,21 @@ def run_tray(supervisor: Supervisor, system: SystemConfig) -> int:
     app = QApplication.instance() or QApplication([])
     app.setQuitOnLastWindowClosed(False)
     from paios_launcher.tray import LauncherTray
+    from paios_launcher.update_check import UpdateChecker, check_interval_hours
 
-    controller = TrayController(supervisor, system, app)
+    controller = TrayController(
+        supervisor, system, app, update_checker=UpdateChecker()
+    )
     tray = LauncherTray(controller)
+    controller.on_update_available = tray.notify_update_available
     poll_timer = QTimer()
     poll_timer.setInterval(1000)
     poll_timer.timeout.connect(supervisor.poll)
+    # M20: periodic update check — notify only; installing stays a
+    # user-approved tray action that launches PAIOSUpdater.exe.
+    update_timer = QTimer()
+    update_timer.setInterval(int(check_interval_hours() * 3600 * 1000))
+    update_timer.timeout.connect(controller.check_for_updates)
 
     supervisor.start_all()
     tray.refresh()
@@ -291,9 +332,13 @@ def run_tray(supervisor: Supervisor, system: SystemConfig) -> int:
         tray.show()
     tray.start_monitoring()
     poll_timer.start()
+    update_timer.start()
+    # First check shortly after boot, off the startup path.
+    QTimer.singleShot(15_000, controller.check_for_updates)
     try:
         return_code = app.exec()
     finally:
+        update_timer.stop()
         poll_timer.stop()
         tray.stop_monitoring()
         tray.hide()
@@ -321,6 +366,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--stop", action="store_true",
         help="ask a running headless launcher to shut down",
     )
+    parser.add_argument(
+        "--version", action="store_true",
+        help="print the installed PAIOS version and exit (M20: the "
+        "updater's health-check hook)",
+    )
     return parser
 
 
@@ -328,6 +378,11 @@ def main(argv: list[str] | None = None) -> int:
     arguments = build_arg_parser().parse_args(
         sys.argv[1:] if argv is None else argv
     )
+    if arguments.version:
+        from paios_launcher.update_check import installed_version
+
+        print(installed_version() or "unknown")
+        return 0
     try:
         system = resolve_config(arguments.config)
     except (FileNotFoundError, ValueError) as error:

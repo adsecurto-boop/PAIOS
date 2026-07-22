@@ -63,6 +63,25 @@ class AppState extends ChangeNotifier {
   Future<void> _persistNotifications() => _store.writeString(
       SettingsService.keyNotifications, jsonEncode(center.toJson()));
 
+  /// Persists the last successful payload of a screen (events, plan,
+  /// inbox) so an offline start still renders something.
+  Future<void> cachePayload(String key, Object payload) async {
+    try {
+      await _store.writeString(key, jsonEncode(payload));
+    } catch (_) {} // a failed cache write is never worth a crash
+  }
+
+  /// The cached payload for [key], or null when absent or unreadable.
+  dynamic cachedPayload(String key) {
+    final raw = _store.readString(key);
+    if (raw == null) return null;
+    try {
+      return jsonDecode(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // --- polling ------------------------------------------------------------
 
   void startPolling() {

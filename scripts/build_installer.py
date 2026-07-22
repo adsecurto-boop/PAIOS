@@ -8,16 +8,23 @@ Pipeline (each stage logged to <output>/build-installer.log):
     1. wheel    pip wheel .            -> paios-<version>-*.whl
     2. PAIOS.exe      PyInstaller onefile, windowed: the launcher
                       (supervisor + tray), PySide6 bundled
-    3. payload        wheel + PAIOS.exe staged for embedding
-    4. PAIOSSetup.exe PyInstaller onefile, console: the installer with
+    3. PAIOSUpdater.exe PyInstaller onefile, console: the standalone
+                      auto-updater (stdlib only, no paios imports)
+    4. payload        wheel + PAIOS.exe + PAIOSUpdater.exe staged
+    5. PAIOSSetup.exe PyInstaller onefile, console: the installer with
                       the payload embedded (unpacked to _MEIPASS)
+    6. release        SHA256SUMS.txt + RELEASE_NOTES.md (M20 release
+                      hygiene: what a GitHub Release must carry so
+                      PAIOSUpdater.exe can verify downloads)
 
 PyInstaller is a build-time tool only (never a runtime dependency):
     pip install pyinstaller
 """
 
 import argparse
+import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -105,6 +112,66 @@ def stage_payload(
     return staged
 
 
+def updater_command(output_dir: Path, work_dir: Path) -> list[str]:
+    return [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean", "--onefile", "--console",
+        "--name", "PAIOSUpdater",
+        "--distpath", str(output_dir),
+        "--workpath", str(work_dir),
+        "--specpath", str(work_dir),
+        "--paths", str(REPO_ROOT / "updater"),
+        str(REPO_ROOT / "updater" / "paios_updater" / "__main__.py"),
+    ]
+
+
+def project_version() -> str:
+    """The single source of truth: [project] version in pyproject.toml."""
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if match is None:
+        raise ValueError("pyproject.toml has no [project] version")
+    return match.group(1)
+
+
+def sha256_of(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_checksums(output_dir: Path, files: list[Path]) -> Path:
+    """SHA256SUMS.txt in `sha256sum` format — the release artifact the
+    updater downloads to verify PAIOSSetup.exe before installing."""
+    lines = [
+        f"{sha256_of(item)}  {item.name}"
+        for item in files
+        if item.is_file()
+    ]
+    checksums = output_dir / "SHA256SUMS.txt"
+    checksums.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return checksums
+
+
+def extract_release_notes(version: str) -> str:
+    """The CHANGELOG section for `version`, for the GitHub Release body."""
+    changelog = REPO_ROOT / "CHANGELOG.md"
+    if not changelog.is_file():
+        return f"PAIOS {version}"
+    text = changelog.read_text(encoding="utf-8")
+    pattern = rf"^## \[{re.escape(version)}\].*?(?=^## \[|\Z)"
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+    return match.group(0).strip() if match else f"PAIOS {version}"
+
+
+def write_release_notes(output_dir: Path, version: str) -> Path:
+    notes = output_dir / "RELEASE_NOTES.md"
+    notes.write_text(extract_release_notes(version) + "\n", encoding="utf-8")
+    return notes
+
+
 def pyinstaller_available() -> bool:
     try:
         import PyInstaller  # noqa: F401
@@ -169,16 +236,33 @@ def main(argv: list[str] | None = None) -> int:
     )
     log.write(f"launcher: {launcher_exe}")
 
+    run(updater_command(output, work), log)
+    updater_exe = output / (
+        "PAIOSUpdater.exe" if os.name == "nt" else "PAIOSUpdater"
+    )
+    log.write(f"updater: {updater_exe}")
+
     if arguments.skip_setup:
         log.write("setup build skipped.")
         return 0
 
-    stage_payload(payload, wheels, launcher_exe)
+    staged = stage_payload(payload, wheels, launcher_exe)
+    if updater_exe.is_file():
+        staged.append(
+            Path(shutil.copy2(updater_exe, payload / updater_exe.name))
+        )
     run(setup_command(output, work, payload), log)
     setup_exe = output / (
         "PAIOSSetup.exe" if os.name == "nt" else "PAIOSSetup"
     )
     log.write(f"installer: {setup_exe}")
+
+    version = project_version()
+    checksums = write_checksums(
+        output, [setup_exe, launcher_exe, updater_exe, built_wheel]
+    )
+    notes = write_release_notes(output, version)
+    log.write(f"release artifacts: {checksums.name}, {notes.name} (v{version})")
     log.write("Product build complete.")
     log.close()
     return 0

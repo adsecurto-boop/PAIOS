@@ -1,5 +1,6 @@
-// Shared scaffold for the read-only list screens: fetch on show,
-// pull-to-refresh, graceful error text, never a crash.
+// Shared scaffold for the REST list screens: fetch on show,
+// pull-to-refresh, graceful error text, never a crash. Subclasses may
+// declare a cacheKey (offline fallback) and a floating action button.
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
@@ -15,6 +16,14 @@ abstract class RestListScreen extends StatefulWidget {
       RestListScreenState screenState);
 
   String get emptyText => 'Nothing here yet.';
+
+  /// When set, the last successful fetch is persisted under this key and
+  /// restored while the server is unreachable (offline cache, M20).
+  String? get cacheKey => null;
+
+  /// Optional floating action button (M20: create flows).
+  Widget? buildFab(BuildContext context, RestListScreenState screenState) =>
+      null;
 
   @override
   State<RestListScreen> createState() => RestListScreenState();
@@ -38,13 +47,36 @@ class RestListScreenState extends State<RestListScreen> {
         rows = fetched;
         error = null;
       });
+      final key = widget.cacheKey;
+      if (key != null) await widget.state.cachePayload(key, fetched);
     } on ApiUnreachableException catch (e) {
       if (!mounted) return;
-      setState(() => error = 'Server unreachable: ${e.detail}');
+      if (!_restoreFromCache()) {
+        setState(() => error = 'Server unreachable: ${e.detail}');
+      }
     } on ApiResponseException catch (e) {
       if (!mounted) return;
       setState(() => error = e.message);
     }
+  }
+
+  /// Offline fallback: render the last cached payload if there is one.
+  bool _restoreFromCache() {
+    final key = widget.cacheKey;
+    if (key == null) return false;
+    final cached = widget.state.cachedPayload(key);
+    if (cached is! List) return false;
+    setState(() {
+      rows = cached.whereType<Map<String, dynamic>>().toList();
+      error = null;
+    });
+    return true;
+  }
+
+  /// Drops one row immediately (Dismissible contract: the widget must
+  /// leave the tree in the same frame); the follow-up reload re-syncs.
+  void removeRow(Map<String, dynamic> row) {
+    setState(() => rows?.remove(row));
   }
 
   /// Run one REST action, snackbar the outcome, reload the list.
@@ -60,6 +92,17 @@ class RestListScreenState extends State<RestListScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final fab = widget.buildFab(context, this);
+    final body = _buildBody(context);
+    if (fab == null) return body;
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      floatingActionButton: fab,
+      body: body,
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
     if (rows == null && error == null) {
       return const Center(child: CircularProgressIndicator());
     }

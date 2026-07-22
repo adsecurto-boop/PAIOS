@@ -65,4 +65,61 @@ void main() {
     expect(resource.value, 250.5);
     expect(resource.unit, 'EUR');
   });
+
+  group('M20 models', () {
+    test('PlanEntry list parses and tolerates gaps', () {
+      final entries = PlanEntry.listFrom(planJson());
+      expect(entries, hasLength(5));
+      expect(entries.first.eventId, 'e1');
+      expect(entries.first.durationMinutes, 60);
+      expect(entries.first.priority, 8.0);
+      // Tolerance: garbage in, empty list out - never a throw.
+      expect(PlanEntry.listFrom(null), isEmpty);
+      expect(PlanEntry.listFrom({'entries': 'nope'}), isEmpty);
+      final bare = PlanEntry.fromJson(const {});
+      expect(bare.eventId, '');
+      expect(bare.plannedStart, isNull);
+    });
+
+    test('InboxItem list parses from envelope or bare list', () {
+      final items = InboxItem.listFrom(inboxJson());
+      expect(items, hasLength(2));
+      expect(items.first.text, 'Buy milk');
+      expect(items.first.status, 'open');
+      expect(items.last.convertedTo, 'goal:g9');
+      expect(InboxItem.listFrom(inboxJson()['items']), hasLength(2));
+      expect(InboxItem.listFrom(null), isEmpty);
+      expect(InboxItem.fromJson(const {}).status, 'open');
+    });
+
+    test('ProposalItem list parses with duplicate flag', () {
+      final items = ProposalItem.listFrom(assistantPlanJson());
+      expect(items, hasLength(3));
+      expect(items[0].kind, 'event');
+      expect(items[0].duplicateOf, isNull);
+      expect(items[2].duplicateOf, 'e1');
+      // Title falls back to the raw text when absent.
+      final bare = ProposalItem.fromJson(const {'text': 'buy milk'});
+      expect(bare.title, 'buy milk');
+      expect(bare.kind, 'inbox');
+    });
+
+    test('DayReason list parses', () {
+      final reasons = DayReason.listFrom(assistantExplainJson());
+      expect(reasons, hasLength(1));
+      expect(reasons.first.title, 'Deep work');
+      expect(reasons.first.reason, contains('priority'));
+      expect(DayReason.listFrom(const {}), isEmpty);
+    });
+
+    test('EventMetadata parses and tolerates gaps', () {
+      final metadata = EventMetadata.fromJson(eventMetadataJson());
+      expect(metadata.tags, ['work', 'focus']);
+      expect(metadata.energy, 'high');
+      expect(metadata.estimatedDurationMinutes, 60);
+      final bare = EventMetadata.fromJson(const {});
+      expect(bare.tags, isEmpty);
+      expect(bare.deadline, isNull);
+    });
+  });
 }

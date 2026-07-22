@@ -1,20 +1,27 @@
-// PAIOS Mobile Companion (Milestone 15).
+// PAIOS Mobile Companion (Milestone 20).
 //
 // The phone is only a client: every byte on screen comes from the REST
 // API; every button calls exactly one endpoint. No scheduling, no
 // learning, no reasoning, no domain state on the device.
+//
+// Navigation is adaptive: a bottom NavigationBar with the five primary
+// destinations on narrow screens, a NavigationRail on wide screens; the
+// drawer always carries the full list.
 import 'package:flutter/material.dart';
 
 import 'screens/contexts_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/events_screen.dart';
 import 'screens/goals_screen.dart';
+import 'screens/inbox_screen.dart';
 import 'screens/notifications_screen.dart';
+import 'screens/planning_screen.dart';
 import 'screens/projects_screen.dart';
 import 'screens/recommendations_screen.dart';
 import 'screens/reflections_screen.dart';
 import 'screens/resources_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/timeline_screen.dart';
 import 'services/app_state.dart';
 import 'services/settings_service.dart';
 import 'theme/app_theme.dart';
@@ -53,10 +60,20 @@ class _Destination {
   final String title;
   final IconData icon;
   final Widget Function(AppState state) build;
-  const _Destination(this.title, this.icon, this.build);
+  final String? _short; // compact label for the bar/rail
+  const _Destination(this.title, this.icon, this.build, {String? short})
+      : _short = short;
+
+  String get shortLabel => _short ?? title;
 }
 
 final List<_Destination> destinations = [
+  _Destination('Today', Icons.today_outlined,
+      (s) => PlanningScreen(state: s)),
+  _Destination('Timeline', Icons.view_timeline_outlined,
+      (s) => TimelineScreen(state: s)),
+  _Destination('Quick Capture', Icons.inbox_outlined,
+      (s) => InboxScreen(state: s), short: 'Capture'),
   _Destination('Dashboard', Icons.dashboard_outlined,
       (s) => DashboardScreen(state: s)),
   _Destination('Recommendations', Icons.lightbulb_outline,
@@ -78,6 +95,13 @@ final List<_Destination> destinations = [
       'Settings', Icons.settings_outlined, (s) => SettingsScreen(state: s)),
 ];
 
+/// The bottom bar / rail shows these; everything else lives behind
+/// "More" (narrow) or the drawer (wide).
+const int primaryCount = 4; // Today, Timeline, Capture, Dashboard
+
+int get notificationsIndex =>
+    destinations.indexWhere((d) => d.title == 'Notifications');
+
 class HomeShell extends StatefulWidget {
   final AppState state;
   final bool startPolling;
@@ -98,6 +122,29 @@ class _HomeShellState extends State<HomeShell> {
     if (widget.startPolling) widget.state.startPolling();
   }
 
+  void _select(int index) => setState(() => _index = index);
+
+  Future<void> _showMoreSheet(BuildContext context) async {
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: ListView(
+          shrinkWrap: true,
+          children: [
+            for (var i = primaryCount; i < destinations.length; i++)
+              ListTile(
+                selected: i == _index,
+                leading: Icon(destinations[i].icon),
+                title: Text(destinations[i].title),
+                onTap: () => Navigator.pop(context, i),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) _select(picked);
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
@@ -105,14 +152,34 @@ class _HomeShellState extends State<HomeShell> {
     return AnimatedBuilder(
       animation: state,
       builder: (context, _) {
+        final wide = MediaQuery.of(context).size.width >= 600;
         final unread = state.center.unreadCount;
+        final page = Column(
+          children: [
+            OfflineBanner(
+              visible: state.online == false,
+              retrySeconds: state.settings.refreshSeconds,
+            ),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: KeyedSubtree(
+                  key: ValueKey<int>(_index),
+                  child: destination.build(state),
+                ),
+              ),
+            ),
+          ],
+        );
         return Scaffold(
           appBar: AppBar(
             title: Text(destination.title),
             actions: [
               IconButton(
                 tooltip: 'Notifications',
-                onPressed: () => setState(() => _index = 8),
+                onPressed: () => _select(notificationsIndex),
                 icon: _BadgeIcon(unread: unread),
               ),
               IconButton(
@@ -141,7 +208,7 @@ class _HomeShellState extends State<HomeShell> {
                           ? 'Notifications ($unread)'
                           : destinations[i].title),
                       onTap: () {
-                        setState(() => _index = i);
+                        _select(i);
                         Navigator.pop(context);
                       },
                     ),
@@ -149,15 +216,46 @@ class _HomeShellState extends State<HomeShell> {
               ),
             ),
           ),
-          body: Column(
-            children: [
-              OfflineBanner(
-                visible: state.online == false,
-                retrySeconds: state.settings.refreshSeconds,
-              ),
-              Expanded(child: destination.build(state)),
-            ],
-          ),
+          body: wide
+              ? Row(
+                  children: [
+                    NavigationRail(
+                      selectedIndex: _index < primaryCount ? _index : null,
+                      labelType: NavigationRailLabelType.all,
+                      onDestinationSelected: _select,
+                      destinations: [
+                        for (var i = 0; i < primaryCount; i++)
+                          NavigationRailDestination(
+                            icon: Icon(destinations[i].icon),
+                            label: Text(destinations[i].shortLabel),
+                          ),
+                      ],
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(child: page),
+                  ],
+                )
+              : page,
+          bottomNavigationBar: wide
+              ? null
+              : NavigationBar(
+                  selectedIndex:
+                      _index < primaryCount ? _index : primaryCount,
+                  onDestinationSelected: (index) => index < primaryCount
+                      ? _select(index)
+                      : _showMoreSheet(context),
+                  destinations: [
+                    for (var i = 0; i < primaryCount; i++)
+                      NavigationDestination(
+                        icon: Icon(destinations[i].icon),
+                        label: destinations[i].shortLabel,
+                      ),
+                    const NavigationDestination(
+                      icon: Icon(Icons.more_horiz),
+                      label: 'More',
+                    ),
+                  ],
+                ),
         );
       },
     );

@@ -266,6 +266,20 @@ class Installer:
             return
         shutil.copy2(bundled, self.launcher_exe)
         self.log.write(f"  {self.launcher_exe}")
+        # M20: the standalone auto-updater ships beside the launcher.
+        bundled_updater = self.options.payload_dir / "PAIOSUpdater.exe"
+        if bundled_updater.is_file():
+            updater_target = self.options.install_dir / "PAIOSUpdater.exe"
+            shutil.copy2(bundled_updater, updater_target)
+            self.log.write(f"  {updater_target}")
+        # M20: version.txt — the updater's fast installed-version probe.
+        wheel = self._wheel()
+        if wheel is not None:
+            version = wheel.name.split("-")[1]
+            (self.options.install_dir / "version.txt").write_text(
+                version + "\n", encoding="utf-8"
+            )
+            self.log.write(f"  version.txt = {version}")
 
     def generate_config(self) -> None:
         if self.config_file.is_file():

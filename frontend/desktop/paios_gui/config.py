@@ -18,6 +18,10 @@ class GuiConfig:
     #: requests run on the UI thread — a hung server must not hang the
     #: window for more than this.
     request_timeout: float = 2.0
+    #: Where the GUI writes (and the Logs page reads) its own log file;
+    #: None means logging to file is off and the Logs page shows its
+    #: empty state.
+    log_dir: str | None = None
 
     def clamp_refresh(self, seconds: int) -> int:
         return max(MIN_REFRESH_SECONDS, min(MAX_REFRESH_SECONDS, seconds))

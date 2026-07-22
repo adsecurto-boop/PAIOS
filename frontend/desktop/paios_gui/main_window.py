@@ -14,6 +14,7 @@ from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QMainWindow,
     QStackedWidget,
@@ -25,13 +26,16 @@ from paios_gui import format as fmt
 from paios_gui.client import ApiClient, ApiResponseError, ApiUnreachable
 from paios_gui.config import GuiConfig
 from paios_gui.dashboard_page import DashboardPage
+from paios_gui.events_page import EventsPage
+from paios_gui.inbox_page import InboxPage
+from paios_gui.log_page import LogPage
 from paios_gui.notifications import (
     DashboardWatcher,
     GuiNotification,
     NotificationCenter,
 )
 from paios_gui.pages import (
-    EventsPage,
+    BackupsPage,
     GoalsPage,
     HistoryPage,
     KnowledgePage,
@@ -41,6 +45,8 @@ from paios_gui.pages import (
     ResourcesPage,
     SettingsPage,
 )
+from paios_gui.planning_page import PlanningPage
+from paios_gui.timeline_page import TimelinePage
 
 
 class MainWindow(QMainWindow):
@@ -67,6 +73,19 @@ class MainWindow(QMainWindow):
         self.banner.hide()
         outer.addWidget(self.banner)
 
+        # M20 toolbar search: a substring filter over the current
+        # table page's rows — presentation only, data untouched.
+        search_row = QHBoxLayout()
+        search_row.addStretch(1)
+        search_row.addWidget(QLabel("Search:"))
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("filter current table (Ctrl+F)")
+        self.search_edit.setFixedWidth(260)
+        self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.textChanged.connect(self._on_search)
+        search_row.addWidget(self.search_edit)
+        outer.addLayout(search_row)
+
         body = QHBoxLayout()
         outer.addLayout(body, stretch=1)
 
@@ -80,19 +99,31 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.dashboard = DashboardPage(self)
+        self.planning = PlanningPage(self)
+        self.inbox = InboxPage(self)
+        self.events_page = EventsPage(self)
+        # M20 nav order: Planning first — it is the startup page.
         self._page_list: list[tuple[str, QWidget]] = [
+            ("Planning", self.planning),
+            ("Timeline", TimelinePage(self)),
+            ("Inbox", self.inbox),
             ("Dashboard", self.dashboard),
             ("Goals", GoalsPage(self)),
             ("Projects", ProjectsPage(self)),
-            ("Events", EventsPage(self)),
+            ("Events", self.events_page),
             ("Resources", ResourcesPage(self)),
             ("Knowledge", KnowledgePage(self)),
             ("Learning", LearningPage(self)),
             ("History", HistoryPage(self)),
+            ("Backups", BackupsPage(self)),
+            ("Logs", LogPage(self)),
             ("Notifications", NotificationsPage(self)),
             ("Settings", SettingsPage(self)),
         ]
-        self._notifications_row = 8  # nav index of the Notifications page
+        #: Nav index of the Notifications page (looked up, not counted).
+        self._notifications_row = [
+            name for name, _ in self._page_list
+        ].index("Notifications")
         for name, page in self._page_list:
             self.navigation.addItem(name)
             self.pages.addWidget(page)
@@ -116,9 +147,28 @@ class MainWindow(QMainWindow):
         if 0 <= row < len(self._page_list):
             self.pages.setCurrentIndex(row)
             self.refresh_now()
+            self._on_search(self.search_edit.text())
 
     def current_page(self) -> QWidget:
         return self._page_list[self.pages.currentIndex()][1]
+
+    def _row_of(self, name: str) -> int:
+        return [page_name for page_name, _ in self._page_list].index(name)
+
+    def _on_search(self, text: str) -> None:
+        page = self.current_page()
+        if hasattr(page, "apply_filter"):
+            page.apply_filter(text)
+
+    def _on_new_event(self) -> None:
+        """Ctrl+N: jump to Events and open the New Event dialog."""
+        self.navigation.setCurrentRow(self._row_of("Events"))
+        self.events_page.on_new()
+
+    def _on_focus_inbox(self) -> None:
+        """Ctrl+I: jump to Inbox and focus the capture box."""
+        self.navigation.setCurrentRow(self._row_of("Inbox"))
+        self.inbox.focus_capture()
 
     def _install_shortcuts(self) -> None:
         for keys in ("F5", "Ctrl+R"):
@@ -129,6 +179,24 @@ class MainWindow(QMainWindow):
                 self,
                 activated=lambda row=index: self.navigation.setCurrentRow(row),
             )
+        QShortcut(
+            QKeySequence("Ctrl+N"), self, activated=self._on_new_event
+        )
+        QShortcut(
+            QKeySequence("Ctrl+I"), self, activated=self._on_focus_inbox
+        )
+        QShortcut(
+            QKeySequence("Ctrl+P"),
+            self,
+            activated=lambda: self.navigation.setCurrentRow(
+                self._row_of("Planning")
+            ),
+        )
+        QShortcut(
+            QKeySequence("Ctrl+F"),
+            self,
+            activated=lambda: self.search_edit.setFocus(),
+        )
         quit_action = QAction(self)
         quit_action.setShortcut(QKeySequence("Ctrl+Q"))
         quit_action.triggered.connect(self.close)
@@ -173,10 +241,13 @@ class MainWindow(QMainWindow):
     # --- actions ---------------------------------------------------------
 
     def run_action(self, call, success_notice: str) -> None:
-        """Perform one REST action; report the outcome; refresh the view."""
+        """Perform one REST action; report the outcome; refresh the view.
+        A busy note shows while the (synchronous) request runs."""
+        self.statusBar().showMessage("Working…")
         try:
             call()
         except ApiUnreachable as error:
+            self.statusBar().showMessage("Offline — action not sent", 8000)
             self._set_online(False, str(error))
             return
         except ApiResponseError as error:
@@ -283,5 +354,6 @@ class MainWindow(QMainWindow):
             f"{self.client.base_url}  ·  {state}"
             f"  ·  refresh every {self.config.refresh_seconds}s"
             f"  ·  last data: {self._last_refresh or '—'}"
-            "  ·  F5 refresh · Ctrl+1…9 pages · Ctrl+Q quit"
+            "  ·  F5 refresh · Ctrl+1…9 pages · Ctrl+N new event"
+            " · Ctrl+F search · Ctrl+Q quit"
         )

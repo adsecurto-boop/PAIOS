@@ -6,10 +6,12 @@ from paios.assistant import context_builder, prompts
 
 
 class TestTemplates:
-    def test_registry_has_the_seven_mission_templates(self):
+    def test_registry_has_the_mission_templates_plus_m20_planning(self):
         assert sorted(prompts.TEMPLATES) == [
+            "day_plan_explanation",
             "explain",
             "learning_explanation",
+            "planning_classification",
             "project_explanation",
             "recommendation_explanation",
             "reflect",
@@ -17,9 +19,15 @@ class TestTemplates:
             "weekly_review",
         ]
 
-    def test_every_template_embeds_the_response_contract(self):
+    def test_every_template_embeds_exactly_one_reply_contract(self):
+        # M20: the planning classification speaks the structured
+        # PLANNING_CONTRACT; every other voice keeps RESPONSE_CONTRACT.
         for template in prompts.TEMPLATES.values():
-            assert prompts.RESPONSE_CONTRACT in template.system
+            if template.name == "planning_classification":
+                assert prompts.PLANNING_CONTRACT in template.system
+                assert prompts.RESPONSE_CONTRACT not in template.system
+            else:
+                assert prompts.RESPONSE_CONTRACT in template.system
 
     def test_render_is_deterministic(self):
         first = prompts.EXPLAIN.render(

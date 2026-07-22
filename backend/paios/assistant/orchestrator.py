@@ -14,7 +14,13 @@ from dataclasses import dataclass
 
 from paios.assistant import context_builder, prompts
 from paios.assistant.adapters import LlmAdapter
-from paios.assistant.response_parser import ParsedResponse, parse_response
+from paios.assistant.response_parser import (
+    ParsedProposal,
+    ParsedResponse,
+    ProposalItem,
+    parse_planning_response,
+    parse_response,
+)
 from paios.assistant.tools import (
     TASK_TEMPLATES,
     AssistantTask,
@@ -46,6 +52,22 @@ class AssistantResult:
     raw_response: str
     #: Present only for snapshot comparisons (the pure diff).
     comparison: SnapshotComparison | None = None
+
+
+@dataclass(frozen=True)
+class AssistantProposal:
+    """A planning proposal (M20): classified items and open questions.
+    Pure structure — the assistant proposes, the user approves, the
+    REST layer executes through ordinary endpoints."""
+
+    task: AssistantTask
+    answer: str
+    items: tuple[ProposalItem, ...]
+    questions: tuple[str, ...]
+    confidence: float | None
+    adapter: str
+    prompt: str
+    raw_response: str
 
 
 class AssistantOrchestrator:
@@ -257,6 +279,57 @@ class AssistantOrchestrator:
                 learning_result=learning_result,
                 **{name: tuple(items) for name, items in inputs.items()},
             ),
+        )
+
+    # --- planning (Milestone 20: proposals and explanations ONLY) -------------
+
+    def classify_captures(
+        self,
+        captures: str,
+        existing_goals=(),
+        existing_projects=(),
+        existing_events=(),
+    ) -> "AssistantProposal":
+        """Captured lines -> a validated Planning Proposal. Structure
+        only: nothing here (or downstream of here) creates entities —
+        the user approves, and the REST layer executes approved items
+        through the ordinary endpoints."""
+        task = AssistantTask.CLASSIFY_CAPTURE
+        template = prompts.TEMPLATES[TASK_TEMPLATES[task]]
+        user_prompt = template.render(
+            captures=captures.strip() or "(nothing captured)",
+            goals="\n".join(str(name) for name in existing_goals) or "(none)",
+            projects="\n".join(str(name) for name in existing_projects)
+            or "(none)",
+            events="\n".join(str(name) for name in existing_events)
+            or "(none)",
+        )
+        request = AssistantRequest(
+            task=task,
+            template_name=template.name,
+            system_prompt=template.system,
+            user_prompt=user_prompt,
+        )
+        raw = self._adapter.complete(request)
+        proposal: ParsedProposal = parse_planning_response(raw)
+        return AssistantProposal(
+            task=task,
+            answer=proposal.answer,
+            items=proposal.items,
+            questions=proposal.questions,
+            confidence=proposal.confidence,
+            adapter=self._adapter.name,
+            prompt=user_prompt,
+            raw_response=raw,
+        )
+
+    def explain_day_plan(self, plan_lines, facts) -> AssistantResult:
+        """WHY for each entry of an existing Scheduler plan. Explanation
+        only — the plan is input, never output."""
+        return self._run(
+            AssistantTask.EXPLAIN_DAY_PLAN,
+            plan="\n".join(str(line) for line in plan_lines) or "(empty plan)",
+            context="\n".join(str(fact) for fact in facts) or "(no facts)",
         )
 
     # --- questions ------------------------------------------------------------

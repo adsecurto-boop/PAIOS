@@ -33,6 +33,9 @@ void main() {
     final state = await stateWithData();
     await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
     await tester.pumpAndSettle();
+    // M20: Planning boots first; the golden is still the dashboard.
+    await tester.tap(find.text('Dashboard').last);
+    await tester.pumpAndSettle();
     await expectLater(
       find.byType(PaiosApp),
       matchesGoldenFile('goldens/dashboard_dark.png'),
@@ -47,6 +50,8 @@ void main() {
 
     final state = await stateWithData(offline: true);
     await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Dashboard').last);
     await tester.pumpAndSettle();
     await expectLater(
       find.byType(PaiosApp),

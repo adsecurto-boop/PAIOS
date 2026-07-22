@@ -50,16 +50,24 @@ class ApiClient {
   Future<dynamic> _request(String method, String path,
       [Map<String, dynamic>? body]) async {
     final uri = Uri.parse('$baseUrl$path');
+    const headers = {'Content-Type': 'application/json; charset=utf-8'};
     http.Response response;
     try {
-      if (method == 'GET') {
-        response = await _http.get(uri).timeout(timeout);
-      } else {
-        response = await _http
-            .post(uri,
-                headers: {'Content-Type': 'application/json; charset=utf-8'},
-                body: jsonEncode(body ?? {}))
-            .timeout(timeout);
+      switch (method) {
+        case 'GET':
+          response = await _http.get(uri).timeout(timeout);
+        case 'PUT':
+          response = await _http
+              .put(uri, headers: headers, body: jsonEncode(body ?? {}))
+              .timeout(timeout);
+        case 'DELETE':
+          response = await _http
+              .delete(uri, headers: headers, body: jsonEncode(body ?? {}))
+              .timeout(timeout);
+        default:
+          response = await _http
+              .post(uri, headers: headers, body: jsonEncode(body ?? {}))
+              .timeout(timeout);
       }
     } on TimeoutException {
       throw ApiUnreachableException('timed out after ${timeout.inSeconds}s');
@@ -139,4 +147,153 @@ class ApiClient {
 
   Future<void> archiveEvent(String id) =>
       _request('POST', '/events/$id/archive');
+
+  // --- M20: event creation and editing ------------------------------------
+
+  /// Builds the shared create/edit body: only fields the caller set are
+  /// sent, so the API's defaults stay in charge.
+  static Map<String, dynamic> _eventBody({
+    required String title,
+    String? mode,
+    String? suggestedTime,
+    double? priority,
+    String? expectedOutcome,
+    Map<String, dynamic>? metadata,
+  }) =>
+      {
+        'title': title,
+        if (mode != null) 'mode': mode,
+        if (suggestedTime != null) 'suggested_time': suggestedTime,
+        if (priority != null) 'priority': priority,
+        if (expectedOutcome != null) 'expected_outcome': expectedOutcome,
+        if (metadata != null && metadata.isNotEmpty) 'metadata': metadata,
+      };
+
+  Future<Map<String, dynamic>> createEvent({
+    required String title,
+    String? mode,
+    String? suggestedTime,
+    double? priority,
+    String? expectedOutcome,
+    Map<String, dynamic>? metadata,
+  }) async =>
+      await _request(
+          'POST',
+          '/events',
+          _eventBody(
+              title: title,
+              mode: mode,
+              suggestedTime: suggestedTime,
+              priority: priority,
+              expectedOutcome: expectedOutcome,
+              metadata: metadata)) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> editEvent(
+    String id, {
+    required String title,
+    String? mode,
+    String? suggestedTime,
+    double? priority,
+    String? expectedOutcome,
+    Map<String, dynamic>? metadata,
+  }) async =>
+      await _request(
+          'PUT',
+          '/events/$id',
+          _eventBody(
+              title: title,
+              mode: mode,
+              suggestedTime: suggestedTime,
+              priority: priority,
+              expectedOutcome: expectedOutcome,
+              metadata: metadata)) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> duplicateEvent(String id,
+          {String? suggestedTime}) async =>
+      await _request(
+          'POST',
+          '/events/$id/duplicate',
+          suggestedTime == null
+              ? {}
+              : {'suggested_time': suggestedTime}) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> getEventMetadata(String id) async =>
+      await _request('GET', '/events/$id/metadata') as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> setEventMetadata(
+          String id, Map<String, dynamic> fields) async =>
+      await _request('PUT', '/events/$id/metadata', fields)
+          as Map<String, dynamic>;
+
+  // --- M20: goals and projects (used by the planning Apply step) ----------
+
+  Future<Map<String, dynamic>> createGoal(
+          {required String name, String? description}) async =>
+      await _request('POST', '/goals', {
+        'name': name,
+        if (description != null) 'description': description,
+      }) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> createProject(
+          {required String name, String? description}) async =>
+      await _request('POST', '/projects', {
+        'name': name,
+        if (description != null) 'description': description,
+      }) as Map<String, dynamic>;
+
+  // --- M20: plan -----------------------------------------------------------
+
+  Future<Map<String, dynamic>> getPlan() async =>
+      await _request('GET', '/plan') as Map<String, dynamic>;
+
+  // --- M20: inbox ----------------------------------------------------------
+
+  Future<List<Map<String, dynamic>>> getInbox() => _list('/inbox', 'items');
+
+  Future<Map<String, dynamic>> addInbox(String text) async =>
+      await _request('POST', '/inbox', {'text': text}) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> convertInbox(
+    String id, {
+    required String to,
+    String? title,
+    String? suggestedTime,
+  }) async =>
+      await _request('POST', '/inbox/$id/convert', {
+        'to': to,
+        if (title != null) 'title': title,
+        if (suggestedTime != null) 'suggested_time': suggestedTime,
+      }) as Map<String, dynamic>;
+
+  Future<void> archiveInbox(String id) =>
+      _request('POST', '/inbox/$id/archive');
+
+  Future<void> deleteInbox(String id) => _request('DELETE', '/inbox/$id');
+
+  // --- M20: templates -------------------------------------------------------
+
+  Future<List<Map<String, dynamic>>> getTemplates() =>
+      _list('/templates', 'templates');
+
+  Future<Map<String, dynamic>> instantiateTemplate(String id,
+          {String? suggestedTime}) async =>
+      await _request(
+          'POST',
+          '/templates/$id/instantiate',
+          suggestedTime == null
+              ? {}
+              : {'suggested_time': suggestedTime}) as Map<String, dynamic>;
+
+  // --- M20: assistant -------------------------------------------------------
+
+  Future<Map<String, dynamic>> assistantStatus() async =>
+      await _request('GET', '/assistant/status') as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> assistantPlan(String text) async =>
+      await _request('POST', '/assistant/plan', {'text': text})
+          as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> assistantExplainDay() async =>
+      await _request('POST', '/assistant/explain-day', {})
+          as Map<String, dynamic>;
 }

@@ -4,6 +4,12 @@ Stronger than the API's rule (which allows facade + parsing types): the
 GUI's allowed imports are the stdlib, PySide6, and paios_gui itself.
 File access is equally forbidden — no open()/pathlib/json-file reads;
 the only I/O primitive is urllib inside client.py.
+
+M20 sanctions exactly two additional local-file surfaces, both
+presentation-only (domain data still never touches the GUI's disk):
+
+- settings_store.py — the wizard's gui-settings.json preferences file;
+- log_page.py — the read-only tail over the GUI's own --log-dir sink.
 """
 
 import ast
@@ -15,6 +21,10 @@ import paios_gui
 ALLOWED_TOP_LEVEL = {"PySide6", "paios_gui"}
 #: File/persistence modules the presentation layer must never touch.
 FORBIDDEN_STDLIB = {"pathlib", "sqlite3", "shelve", "pickle", "dbm"}
+#: The M20-sanctioned file surfaces (see module docstring) — pathlib
+#: allowed there and nowhere else; stores stay forbidden everywhere.
+FILE_SURFACE_MODULES = {"settings_store.py", "log_page.py"}
+ALWAYS_FORBIDDEN_STDLIB = FORBIDDEN_STDLIB - {"pathlib"}
 
 
 def _gui_modules():
@@ -50,8 +60,13 @@ class TestForbiddenImports:
         for module_path in _gui_modules():
             source = module_path.read_text(encoding="utf-8")
             tree = ast.parse(source)
+            forbidden = (
+                ALWAYS_FORBIDDEN_STDLIB
+                if module_path.name in FILE_SURFACE_MODULES
+                else FORBIDDEN_STDLIB
+            )
             for name in _imports(tree):
-                assert name.split(".")[0] not in FORBIDDEN_STDLIB, (
+                assert name.split(".")[0] not in forbidden, (
                     f"{module_path.name} imports {name!r}"
                 )
             for node in ast.walk(tree):

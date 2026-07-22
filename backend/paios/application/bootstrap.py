@@ -38,7 +38,9 @@ def build_components(config: ApplicationConfig) -> Components:
     clock = config.clock if config.clock is not None else SystemClock()
     repositories = RepositoryFactory(config.data_dir)
     kernel = RuntimeKernel(repositories=repositories, clock=clock)
-    scheduler = Scheduler(kernel)
+    # M20 additive: pass the configured Planner through the Scheduler's
+    # existing R3 constructor seam (None -> DeterministicPlanner inside).
+    scheduler = Scheduler(kernel, planner=config.planner)
     engine = DecisionEngine()
     bridge = RecalculationBridge(kernel)
     sync = PersistenceSync(kernel, repositories)

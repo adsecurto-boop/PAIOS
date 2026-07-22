@@ -23,6 +23,9 @@ class SettingsService {
   static const _keyDark = 'dark_theme';
   static const keyDashboardCache = 'dashboard_cache';
   static const keyNotifications = 'notification_history';
+  static const keyEventsCache = 'events_cache';
+  static const keyPlanCache = 'plan_cache';
+  static const keyInboxCache = 'inbox_cache';
 
   final SharedPreferences _prefs;
 

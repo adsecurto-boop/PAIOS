@@ -59,6 +59,13 @@ class FakeController:
     def quit(self):
         self.calls.append("quit")
 
+    # M20 update surface (notify-only; installing is a hand-off).
+    def check_for_updates(self):
+        self.calls.append("check_for_updates")
+
+    def install_update(self):
+        self.calls.append("install_update")
+
 
 @pytest.fixture
 def tray(qapp):
@@ -83,6 +90,7 @@ class TestMenu:
             "Resume Runtime",
             "Restart Runtime",
             "View Logs",
+            "Check for Updates",
             "Exit",
         ):
             assert expected in labels
@@ -94,10 +102,44 @@ class TestMenu:
             ("pause", "pause_runtime"),
             ("restart", "restart_runtime"),
             ("logs", "view_logs"),
+            ("check_updates", "check_for_updates"),
             ("exit", "quit"),
         ):
             widget.action(key).trigger()
             assert controller.calls[-1] == call
+
+    def test_install_update_hidden_until_notified(self, tray):
+        widget, _ = tray
+        action = widget.action("install_update")
+        assert action.isVisible() is False
+
+        class Update:
+            current = "2.2.0"
+            target = "2.3.0"
+            notes = ""
+
+        widget.notify_update_available(Update())
+        assert action.isVisible() is True
+        assert "2.3.0" in action.text()
+
+    def test_update_dialog_offers_notes_update_now_and_later(self, tray):
+        widget, _ = tray
+        assert widget.build_update_dialog() is None  # nothing pending
+
+        class Update:
+            current = "2.2.0"
+            target = "2.3.0"
+            notes = "## What's new\n- Planning Workspace"
+
+        widget.notify_update_available(Update())
+        dialog = widget.build_update_dialog()
+        assert dialog is not None
+        assert "2.3.0" in dialog.text()
+        assert "What's new" in dialog.detailedText()
+        labels = [button.text() for button in dialog.buttons()]
+        assert "Update Now" in labels
+        assert "Later" in labels
+        dialog.deleteLater()
 
     def test_resume_action_when_paused(self, tray):
         widget, controller = tray

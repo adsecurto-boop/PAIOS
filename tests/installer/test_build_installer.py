@@ -96,3 +96,45 @@ class TestPayloadStaging:
         assert [path.name for path in staged] == [
             "paios-1.7.0-py3-none-any.whl"
         ]
+
+
+class TestReleaseArtifacts:
+    """M20 release hygiene: what the GitHub Release must carry."""
+
+    def test_updater_is_onefile_console_named_paiosupdater(self, tmp_path):
+        command = build_installer.updater_command(
+            tmp_path / "dist", tmp_path / "work"
+        )
+        assert "--onefile" in command
+        assert "--console" in command
+        assert command[command.index("--name") + 1] == "PAIOSUpdater"
+        assert "paios_updater" in command[-1]
+
+    def test_project_version_reads_pyproject(self):
+        version = build_installer.project_version()
+        assert version == "2.2.0"
+
+    def test_checksums_file_in_sha256sum_format(self, tmp_path):
+        artifact = tmp_path / "PAIOSSetup.exe"
+        artifact.write_bytes(b"payload")
+        missing = tmp_path / "not-built.exe"
+        checksums = build_installer.write_checksums(
+            tmp_path, [artifact, missing]
+        )
+        lines = checksums.read_text(encoding="utf-8").strip().splitlines()
+        assert len(lines) == 1  # missing files are skipped, not invented
+        digest, name = lines[0].split()
+        assert name == "PAIOSSetup.exe"
+        assert digest == build_installer.sha256_of(artifact)
+
+    def test_release_notes_extracts_current_changelog_section(
+        self, tmp_path
+    ):
+        notes = build_installer.extract_release_notes("2.2.0")
+        assert notes.startswith("## [2.2.0]")
+        assert "## [2.1.0]" not in notes
+
+    def test_release_notes_fall_back_for_unknown_version(self):
+        assert build_installer.extract_release_notes("0.0.99") == (
+            "PAIOS 0.0.99"
+        )

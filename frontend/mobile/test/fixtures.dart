@@ -119,3 +119,188 @@ List<Map<String, dynamic>> eventsJson() => [
         ],
       },
     ];
+
+// --- M20 fixtures ----------------------------------------------------------
+
+/// A wider event list for the timeline join: today upcoming (e1),
+/// tomorrow (e2), overdue (e3), completed today (e4), running (e5).
+List<Map<String, dynamic>> timelineEventsJson() => [
+      ...eventsJson(),
+      {
+        'event_id': 'e2',
+        'description': 'Write report',
+        'category': 'Work',
+        'status': 'Ready',
+        'start_time': '2026-07-22T09:00:00',
+        'duration_minutes': 45,
+      },
+      {
+        'event_id': 'e3',
+        'description': 'Morning run',
+        'category': 'Health',
+        'status': 'Ready',
+        'start_time': '2026-07-21T07:00:00',
+        'duration_minutes': 30,
+      },
+      {
+        'event_id': 'e4',
+        'description': 'Journal',
+        'category': 'Personal',
+        'status': 'Completed',
+        'start_time': '2026-07-21T06:00:00',
+        'end_time': '2026-07-21T06:30:00',
+        'duration_minutes': 30,
+      },
+      {
+        'event_id': 'e5',
+        'description': 'Review PRs',
+        'category': 'Work',
+        'status': 'Running',
+        'start_time': '2026-07-21T08:30:00',
+        'duration_minutes': 60,
+      },
+    ];
+
+Map<String, dynamic> planJson() => {
+      'created_at': '2026-07-21T08:55:00',
+      'entries': [
+        {
+          'event_id': 'e1',
+          'planned_start': '2026-07-21T10:00:00',
+          'planned_end': '2026-07-21T11:00:00',
+          'duration_minutes': 60,
+          'priority': 8.0,
+          'recommendation_id': 'r1',
+        },
+        {
+          'event_id': 'e2',
+          'planned_start': '2026-07-22T09:00:00',
+          'planned_end': '2026-07-22T09:45:00',
+          'duration_minutes': 45,
+          'priority': 6.0,
+          'recommendation_id': null,
+        },
+        {
+          'event_id': 'e3',
+          'planned_start': '2026-07-21T07:00:00',
+          'planned_end': '2026-07-21T07:30:00',
+          'duration_minutes': 30,
+          'priority': 5.0,
+          'recommendation_id': null,
+        },
+        {
+          'event_id': 'e4',
+          'planned_start': '2026-07-21T06:00:00',
+          'planned_end': '2026-07-21T06:30:00',
+          'duration_minutes': 30,
+          'priority': 4.0,
+          'recommendation_id': null,
+        },
+        {
+          'event_id': 'e5',
+          'planned_start': '2026-07-21T08:30:00',
+          'planned_end': '2026-07-21T09:30:00',
+          'duration_minutes': 60,
+          'priority': 7.0,
+          'recommendation_id': null,
+        },
+      ],
+    };
+
+Map<String, dynamic> inboxJson() => {
+      'items': [
+        {
+          'id': 'i1',
+          'text': 'Buy milk',
+          'status': 'open',
+          'created_at': '2026-07-21T08:00:00',
+          'converted_to': null,
+        },
+        {
+          'id': 'i2',
+          'text': 'Plan the summer trip',
+          'status': 'converted',
+          'created_at': '2026-07-20T19:00:00',
+          'converted_to': 'goal:g9',
+        },
+      ],
+    };
+
+Map<String, dynamic> assistantStatusJson() => {
+      'provider': 'ollama',
+      'available': true,
+      'fallback': 'heuristic',
+    };
+
+Map<String, dynamic> assistantPlanJson() => {
+      'source': 'ollama',
+      'answer': 'Sorted your notes into three items.',
+      'items': [
+        {
+          'text': 'finish the quarterly report',
+          'kind': 'event',
+          'title': 'Finish quarterly report',
+          'day_scope': 'today',
+          'duplicate_of': null,
+          'notes': null,
+        },
+        {
+          'text': 'learn piano someday',
+          'kind': 'goal',
+          'title': 'Learn piano',
+          'day_scope': null,
+          'duplicate_of': null,
+          'notes': 'Long-term aspiration',
+        },
+        {
+          'text': 'deep work session',
+          'kind': 'event',
+          'title': 'Deep work',
+          'day_scope': 'today',
+          'duplicate_of': 'e1',
+          'notes': 'Already scheduled',
+        },
+      ],
+      'questions': ['When is the report due?'],
+      'confidence': 0.8,
+    };
+
+Map<String, dynamic> assistantExplainJson() => {
+      'source': 'heuristic',
+      'answer': 'A focused morning, then admin.',
+      'entries': [
+        {
+          'event_id': 'e1',
+          'title': 'Deep work',
+          'planned_start': '2026-07-21T10:00:00',
+          'duration_minutes': 60,
+          'reason': 'Highest priority; energy is fresh',
+        },
+      ],
+    };
+
+Map<String, dynamic> templatesJson() => {
+      'templates': [
+        {'template_id': 't1', 'title': 'Morning routine'},
+      ],
+    };
+
+Map<String, dynamic> eventMetadataJson() => {
+      'event_id': 'e1',
+      'tags': ['work', 'focus'],
+      'deadline': '2026-07-25T23:59:00',
+      'energy': 'high',
+      'estimated_duration_minutes': 60,
+      'depends_on': <String>[],
+    };
+
+Map<String, dynamic> createEventResponseJson({String eventId = 'e9'}) => {
+      'recommendation': {
+        'recommendation_id': 'r9',
+        'status': 'Pending',
+        'reason': 'Scheduled by request',
+        'priority': 5.0,
+      },
+      'event_id': eventId,
+      'materialized': true,
+    };

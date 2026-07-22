@@ -8,7 +8,7 @@ provides, so tests exercise the full menu against a fake.
 
 from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QBrush, QColor, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+from PySide6.QtWidgets import QMenu, QMessageBox, QSystemTrayIcon
 
 #: Aggregate supervisor state -> dot colour.
 STATE_COLORS = {
@@ -75,6 +75,21 @@ class LauncherTray(QSystemTrayIcon):
             self._menu.addAction(action)
             self._actions[key] = action
         self._menu.addSeparator()
+        # M20: update actions. "Install update" stays hidden until a
+        # check finds one; installing hands over to PAIOSUpdater.exe.
+        check_updates = QAction("Check for Updates", self._menu)
+        check_updates.triggered.connect(controller.check_for_updates)
+        self._menu.addAction(check_updates)
+        self._actions["check_updates"] = check_updates
+        install_update = QAction("Install Update", self._menu)
+        install_update.triggered.connect(self.show_update_dialog)
+        install_update.setVisible(False)
+        self._menu.addAction(install_update)
+        self._actions["install_update"] = install_update
+        self._pending_update = None
+        # Clicking the toast opens the same consent dialog.
+        self.messageClicked.connect(self._on_message_clicked)
+        self._menu.addSeparator()
         exit_action = QAction("Exit", self._menu)
         exit_action.triggered.connect(controller.quit)
         self._menu.addAction(exit_action)
@@ -108,3 +123,60 @@ class LauncherTray(QSystemTrayIcon):
         self._actions["resume"].setEnabled(
             daemon_state in ("paused", "stopped", "failed")
         )
+
+    # --- updates (M20) -------------------------------------------------------
+
+    def notify_update_available(self, update) -> None:
+        """Surface a found update: menu entry + toast. Never installs,
+        never interrupts — the user opens the consent dialog when ready."""
+        self._pending_update = update
+        action = self._actions["install_update"]
+        action.setText(f"Install Update ({update.target})")
+        action.setVisible(True)
+        self.showMessage(
+            f"PAIOS {update.target} available",
+            f"You are on {update.current}. Click for what's new and to "
+            "update — or keep working; nothing is interrupted.",
+            QSystemTrayIcon.MessageIcon.Information,
+            10_000,
+        )
+
+    def _on_message_clicked(self) -> None:
+        if self._pending_update is not None:
+            self.show_update_dialog()
+
+    def build_update_dialog(self) -> QMessageBox | None:
+        """The consent dialog: what's new + Update Now / Later. Split
+        from show_update_dialog so tests can inspect it offscreen."""
+        update = self._pending_update
+        if update is None:
+            return None
+        dialog = QMessageBox()
+        dialog.setWindowTitle("PAIOS Update")
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setText(
+            f"PAIOS {update.target} is available (you are on "
+            f"{update.current})."
+        )
+        notes = (update.notes or "").strip()
+        dialog.setInformativeText(
+            "PAIOS will close, update and restart automatically. "
+            "A backup is kept and restored if anything goes wrong."
+        )
+        if notes:
+            dialog.setDetailedText(notes)  # collapsible "What's new"
+        update_now = dialog.addButton(
+            "Update Now", QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(update_now)
+        return dialog
+
+    def show_update_dialog(self) -> None:
+        dialog = self.build_update_dialog()
+        if dialog is None:
+            return
+        dialog.exec()
+        clicked = dialog.clickedButton()
+        if clicked is not None and clicked.text() == "Update Now":
+            self._controller.install_update()

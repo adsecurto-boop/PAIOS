@@ -14,3 +14,13 @@ class ApiConfig:
     port: int = DEFAULT_PORT
     #: Storage location handed to the composed Application.
     data_dir: str = ".data"
+    #: M20: where /backups archives live. None -> "<data_dir>/../backups"
+    #: mirrors the installer layout; a plain ".backups" for dev runs.
+    backup_dir: str | None = None
+    #: M20: assistant provider — "none" (deterministic heuristics only),
+    #: "null" (offline canned adapter), "anthropic" or "openai".
+    #: Environment variables PAIOS_AI_PROVIDER / PAIOS_AI_MODEL override
+    #: at composition time; SDK API keys come from the SDKs' own
+    #: standard environment variables, never from this config.
+    ai_provider: str = "none"
+    ai_model: str | None = None
