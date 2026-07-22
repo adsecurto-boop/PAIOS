@@ -5,6 +5,8 @@ injected (tests use a fake). Defaults follow current Claude API
 guidance: model ``claude-opus-4-8`` with adaptive thinking.
 """
 
+import os
+
 from paios.assistant.adapters import (
     AdapterError,
     AdapterUnavailableError,
@@ -12,6 +14,7 @@ from paios.assistant.adapters import (
 )
 
 DEFAULT_MODEL = "claude-opus-4-8"
+API_KEY_VARIABLE = "ANTHROPIC_API_KEY"
 
 
 class AnthropicAdapter(LlmAdapter):
@@ -34,11 +37,14 @@ class AnthropicAdapter(LlmAdapter):
                 "The 'anthropic' SDK is not installed (pip install"
                 " anthropic)"
             ) from error
-        self._client = (
-            anthropic.Anthropic(api_key=api_key)
-            if api_key is not None
-            else anthropic.Anthropic()
+        key = api_key if api_key is not None else os.environ.get(
+            API_KEY_VARIABLE
         )
+        if not key:
+            # Without this guard the SDK raises its own error type at
+            # construction, which callers cannot map to the fallback.
+            raise AdapterUnavailableError(f"{API_KEY_VARIABLE} is not set")
+        self._client = anthropic.Anthropic(api_key=key)
 
     @property
     def name(self) -> str:

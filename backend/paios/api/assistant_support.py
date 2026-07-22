@@ -21,11 +21,37 @@ from paios.planning.classifier import classify_lines
 #: Providers the transport can compose.
 PROVIDERS = ("none", "null", "anthropic", "openai")
 
+#: How to turn a real provider on (shown in logs and /assistant/status).
+CONFIG_HINT = (
+    "set PAIOS_AI_PROVIDER=openai or PAIOS_AI_PROVIDER=anthropic (or"
+    " --ai-provider), plus the provider's API key environment variable"
+)
+
 
 def resolve_provider(config_provider: str) -> str:
     provider = os.environ.get("PAIOS_AI_PROVIDER", config_provider or "none")
     provider = provider.strip().lower()
     return provider if provider in PROVIDERS else "none"
+
+
+def _construct(
+    provider: str, model: str | None
+) -> AssistantOrchestrator | None:
+    """The one construction path; raises AdapterError when the chosen
+    provider's SDK or key is absent, returns None for "none"."""
+    if provider == "null":
+        return AssistantOrchestrator(NullAdapter())
+    if provider == "anthropic":
+        from paios.assistant.adapters.anthropic import AnthropicAdapter
+
+        kwargs = {"model": model} if model else {}
+        return AssistantOrchestrator(AnthropicAdapter(**kwargs))
+    if provider == "openai":
+        from paios.assistant.adapters.openai import OpenAIAdapter
+
+        kwargs = {"model": model} if model else {}
+        return AssistantOrchestrator(OpenAIAdapter(**kwargs))
+    return None
 
 
 def build_orchestrator(
@@ -35,21 +61,31 @@ def build_orchestrator(
     fall back to the deterministic path."""
     model = os.environ.get("PAIOS_AI_MODEL", model or None) or None
     try:
-        if provider == "null":
-            return AssistantOrchestrator(NullAdapter())
-        if provider == "anthropic":
-            from paios.assistant.adapters.anthropic import AnthropicAdapter
-
-            kwargs = {"model": model} if model else {}
-            return AssistantOrchestrator(AnthropicAdapter(**kwargs))
-        if provider == "openai":
-            from paios.assistant.adapters.openai import OpenAIAdapter
-
-            kwargs = {"model": model} if model else {}
-            return AssistantOrchestrator(OpenAIAdapter(**kwargs))
+        return _construct(provider, model)
     except AdapterError:
         return None
-    return None
+
+
+def compose_assistant(
+    config_provider: str, config_model: str | None = None
+) -> tuple[str, AssistantOrchestrator | None, str]:
+    """(provider, orchestrator-or-None, human-readable reason).
+
+    The reason states why the assistant is (un)available in words a
+    user can act on — it feeds startup logs and /assistant/status."""
+    provider = resolve_provider(config_provider)
+    model = os.environ.get("PAIOS_AI_MODEL", config_model or None) or None
+    if provider == "none":
+        return (
+            provider,
+            None,
+            f"no AI provider configured: {CONFIG_HINT}",
+        )
+    try:
+        orchestrator = _construct(provider, model)
+    except AdapterError as error:
+        return provider, None, str(error)
+    return provider, orchestrator, f"{provider} adapter ready"
 
 
 #: Exceptions after which the deterministic fallback answers instead.

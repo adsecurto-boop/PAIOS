@@ -21,6 +21,8 @@ BAD = "#d96b6b"
 STYLESHEET = f"""
 QMainWindow, QDialog {{ background: {BACKGROUND}; }}
 QWidget {{ color: {TEXT}; font-size: 13px; }}
+QWizard, QWizardPage {{ background: {BACKGROUND}; }}
+QWizard QLabel {{ color: {TEXT}; }}
 QFrame#section {{
     background: {SURFACE};
     border: 1px solid {BORDER};

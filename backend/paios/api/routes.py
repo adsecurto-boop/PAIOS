@@ -53,12 +53,23 @@ class ApiRouter:
         backups: BackupManager | None = None,
         assistant=None,
         assistant_provider: str = "none",
+        assistant_reason: str | None = None,
     ) -> None:
         self._app = application
         self._planning = planning
         self._backups = backups
         self._assistant = assistant
         self._assistant_provider = assistant_provider
+        self._assistant_reason = (
+            assistant_reason
+            if assistant_reason is not None
+            else (
+                f"{assistant_provider} adapter ready"
+                if assistant is not None
+                else "no AI provider configured: "
+                + assistant_support.CONFIG_HINT
+            )
+        )
 
     def _require_planning(self) -> PlanningService:
         if self._planning is None:
@@ -415,6 +426,7 @@ class ApiRouter:
             "provider": self._assistant_provider,
             "available": self._assistant is not None,
             "fallback": "heuristic",
+            "reason": self._assistant_reason,
         }
 
     def _post_assistant_plan(self, params, body):

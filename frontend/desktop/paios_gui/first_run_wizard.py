@@ -79,14 +79,18 @@ class _UrlPage(QWizardPage):
         client = ApiClient(self.url_edit.text().strip(), timeout=2.0)
         try:
             status = client.get_status()
-        except Exception as error:
-            self.result_label.setText(f"✗ Unreachable: {error}")
+        except Exception:
+            self.result_label.setText(
+                "✗ Could not connect. Check that the PAIOS backend is"
+                " running at this address, then try again."
+            )
+            self.result_label.setWordWrap(True)
             return
         operational = status.get("operational")
         self.result_label.setText(
-            "✓ Connected — operational"
+            "✓ Connected — backend is running"
             if operational
-            else "✓ Connected (not operational)"
+            else "✓ Connected — backend is starting up"
         )
 
 
@@ -132,12 +136,10 @@ class _ProviderPage(QWizardPage):
         form.addRow("Provider", self.provider_label)
         self.available_label = QLabel("—")
         form.addRow("Available", self.available_label)
-        form.addRow(
-            QLabel(
-                "Without a provider the deterministic heuristic answers"
-                " planning requests — everything still works."
-            )
-        )
+        self.summary_label = QLabel("")
+        self.summary_label.setWordWrap(True)
+        self.summary_label.setObjectName("subtitle")
+        form.addRow(self.summary_label)
 
     def initializePage(self) -> None:  # Qt naming
         client = ApiClient(self._wizard.chosen_url(), timeout=2.0)
@@ -146,12 +148,31 @@ class _ProviderPage(QWizardPage):
         except Exception:
             self.provider_label.setText("(backend unreachable)")
             self.available_label.setText("—")
+            self.summary_label.setText(
+                "Could not reach the backend, so the AI provider is"
+                " unknown. You can finish setup now — PAIOS will check"
+                " again once the backend is running."
+            )
             return
-        self.provider_label.setText(str(status.get("provider", "none")))
-        self.available_label.setText(
-            "yes" if status.get("available") else
-            f"no — falls back to {status.get('fallback', 'heuristic')}"
+        provider = str(status.get("provider", "none"))
+        self.provider_label.setText(provider)
+        if status.get("available"):
+            self.available_label.setText("yes")
+            self.summary_label.setText(
+                f"Backend connected. AI provider: {provider} — AI-assisted"
+                " planning is ready."
+            )
+            return
+        self.available_label.setText("no")
+        reason = status.get("reason")
+        message = (
+            f"Backend connected. AI provider: {provider}. PAIOS will use"
+            " deterministic planning until an AI provider is configured"
+            " on the backend — everything still works."
         )
+        if reason:
+            message += f"\n\nDetails: {reason}"
+        self.summary_label.setText(message)
 
 
 class _StylePage(QWizardPage):
@@ -197,6 +218,11 @@ class FirstRunWizard(QWizard):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("PAIOS — First run")
+        # Windows defaults to the native AeroStyle, which paints its own
+        # white chrome and ignores the app's dark palette — light-gray
+        # text on white made the wizard unreadable on first launch.
+        # ClassicStyle renders with the application palette/stylesheet.
+        self.setWizardStyle(QWizard.WizardStyle.ClassicStyle)
         self.url_page = _UrlPage(base_url)
         self.preferences_page = _PreferencesPage(refresh_seconds)
         self.style_page = _StylePage()

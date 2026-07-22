@@ -128,14 +128,28 @@ class ApiServer:
             else str(Path(self._config.data_dir).parent / "backups")
         )
         self._backups = BackupManager(self._config.data_dir, backup_dir)
-        self._assistant_provider = assistant_support.resolve_provider(
-            self._config.ai_provider
-        )
-        self._assistant = assistant_support.build_orchestrator(
-            self._assistant_provider, self._config.ai_model
+        (
+            self._assistant_provider,
+            self._assistant,
+            self._assistant_reason,
+        ) = assistant_support.compose_assistant(
+            self._config.ai_provider, self._config.ai_model
         )
         self._http: HTTPServer | None = None
         self._serving = False
+
+    def assistant_summary(self) -> list[str]:
+        """Human-readable startup lines: provider, reason, active mode."""
+        if self._assistant is not None:
+            return [
+                f"AI provider: {self._assistant_provider} (available)",
+            ]
+        return [
+            f"AI provider: {self._assistant_provider}",
+            f"Reason: {self._assistant_reason}",
+            "Running deterministic heuristic mode"
+            " (planning still works, without a language model).",
+        ]
 
     @property
     def application(self) -> Application:
@@ -161,8 +175,13 @@ class ApiServer:
             backups=self._backups,
             assistant=self._assistant,
             assistant_provider=self._assistant_provider,
+            assistant_reason=self._assistant_reason,
         )
         self._http = http
+        import logging
+
+        for line in self.assistant_summary():
+            logging.getLogger("paios.api").info(line)
 
     def serve_forever(self) -> None:
         if self._http is None:
@@ -202,6 +221,8 @@ def serve(
         f"PAIOS API listening on http://{server._config.host}:{server.port}"
         "  (Ctrl+C to stop)\n"
     )
+    for line in server.assistant_summary():
+        out.write(line + "\n")
     out.flush()
     try:
         server.serve_forever()

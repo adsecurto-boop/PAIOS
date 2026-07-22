@@ -3,6 +3,7 @@ assistant (offline deterministic path), backups."""
 
 import pytest
 
+from paios.api import assistant_support
 from paios.api.routes import ApiRouter
 from paios.planning.service import PlanningService
 from paios.system.backup import BackupManager
@@ -237,11 +238,43 @@ class TestInbox:
 class TestAssistantOffline:
     def test_status_reports_heuristic_fallback(self, full_router):
         payload = ok(full_router, "GET", "/assistant/status")
-        assert payload == {
-            "provider": "none",
-            "available": False,
-            "fallback": "heuristic",
-        }
+        assert payload["provider"] == "none"
+        assert payload["available"] is False
+        assert payload["fallback"] == "heuristic"
+        # The reason is a user-facing sentence explaining how to enable
+        # a real provider (M20 polish: no silent fallback).
+        assert "no AI provider configured" in payload["reason"]
+        assert "PAIOS_AI_PROVIDER" in payload["reason"]
+
+    def test_compose_none_explains_how_to_configure(self, monkeypatch):
+        monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+        provider, orchestrator, reason = (
+            assistant_support.compose_assistant("none")
+        )
+        assert provider == "none"
+        assert orchestrator is None
+        assert "PAIOS_AI_PROVIDER" in reason
+
+    def test_compose_env_variable_overrides_config(self, monkeypatch):
+        monkeypatch.setenv("PAIOS_AI_PROVIDER", "null")
+        provider, orchestrator, reason = (
+            assistant_support.compose_assistant("none")
+        )
+        assert provider == "null"
+        assert orchestrator is not None
+        assert "ready" in reason
+
+    def test_compose_missing_sdk_or_key_stays_graceful(self, monkeypatch):
+        # Whichever is absent (SDK or OPENAI_API_KEY), composition must
+        # return None with an actionable reason — never raise.
+        monkeypatch.setenv("PAIOS_AI_PROVIDER", "openai")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        provider, orchestrator, reason = (
+            assistant_support.compose_assistant("none")
+        )
+        assert provider == "openai"
+        assert orchestrator is None
+        assert "openai" in reason.lower()
 
     def test_plan_proposal_is_deterministic_offline(self, full_router):
         body = {"text": "Tomorrow\nTemple\nGym\nBuild PAIOS"}

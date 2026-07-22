@@ -32,7 +32,7 @@ API never schedules; it proposes, the Scheduler materializes.
 | GET/POST | `/templates` · DELETE `/templates/{id}` · POST `/templates/{id}/instantiate` | Event templates |
 | GET/POST | `/recurrences` · DELETE `/recurrences/{id}` | Recurrence rules (`title`, `time_of_day HH:MM`, `days[mon..sun]`, `first_run?`); due rules expand on `/tick` |
 | GET/POST | `/inbox` · POST `/inbox/{id}/convert\|archive` · DELETE `/inbox/{id}` | Quick capture; convert `to: goal\|project\|event` |
-| GET | `/assistant/status` | Provider + availability (`fallback: heuristic`) |
+| GET | `/assistant/status` | Provider + availability (`fallback: heuristic`) + human-readable `reason` (why the provider is or isn't available). Configure via `PAIOS_AI_PROVIDER=openai\|anthropic` / `PAIOS_AI_MODEL` env vars or `--ai-provider` / `--ai-model` flags, plus the SDK's own API key env var (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) |
 | POST | `/assistant/plan` | Text → Planning Proposal `{source, answer, items[], questions[], confidence}` — proposal ONLY, no side effects |
 | POST | `/assistant/explain-day` | Per-plan-entry WHY grounded in recorded facts |
 | GET/POST | `/backups` · POST `/backups/restore` | Backup archives (restore applies at next start) |

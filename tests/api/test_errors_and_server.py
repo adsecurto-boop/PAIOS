@@ -183,6 +183,7 @@ class TestDelegation:
             "_backups",
             "_assistant",
             "_assistant_provider",
+            "_assistant_reason",
         }
 
     def test_actions_delegate_to_facade_methods(self, api_app):

@@ -3,6 +3,8 @@
 Translation only; lazy SDK import; injectable client for tests.
 """
 
+import os
+
 from paios.assistant.adapters import (
     AdapterError,
     AdapterUnavailableError,
@@ -10,6 +12,7 @@ from paios.assistant.adapters import (
 )
 
 DEFAULT_MODEL = "gpt-4o"
+API_KEY_VARIABLE = "OPENAI_API_KEY"
 
 
 class OpenAIAdapter(LlmAdapter):
@@ -31,11 +34,14 @@ class OpenAIAdapter(LlmAdapter):
             raise AdapterUnavailableError(
                 "The 'openai' SDK is not installed (pip install openai)"
             ) from error
-        self._client = (
-            openai.OpenAI(api_key=api_key)
-            if api_key is not None
-            else openai.OpenAI()
+        key = api_key if api_key is not None else os.environ.get(
+            API_KEY_VARIABLE
         )
+        if not key:
+            # Without this guard the SDK raises its own error type at
+            # construction, which callers cannot map to the fallback.
+            raise AdapterUnavailableError(f"{API_KEY_VARIABLE} is not set")
+        self._client = openai.OpenAI(api_key=key)
 
     @property
     def name(self) -> str:
