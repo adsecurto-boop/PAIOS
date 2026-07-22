@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paios"
-version = "1.6.0"
+version = "1.7.0"
 description = "PAIOS - Personal AI Operating System"
 requires-python = ">=3.12"
 # The backend is deliberately dependency-free (stdlib only).
@@ -20,15 +20,21 @@ gui = ["PySide6-Essentials>=6.7"]
 # subcommands of the single `paios` executable.
 paios = "paios.cli.main:main"
 paios-gui = "paios_gui.app:main"
+# The product launcher (M19): supervises daemon + API + GUI under one
+# process with a system tray. PAIOS.exe is this entry frozen by
+# PyInstaller (scripts/build_installer.py).
+paios-launcher = "paios_launcher.app:main"
 
 [tool.setuptools.packages.find]
-where = ["backend", "frontend/desktop"]
-include = ["paios*", "paios_gui*"]
+where = ["backend", "frontend/desktop", "launcher"]
+include = ["paios*", "paios_gui*", "paios_launcher*"]
 
 [tool.setuptools.package-dir]
 paios = "backend/paios"
 paios_gui = "frontend/desktop/paios_gui"
+paios_launcher = "launcher/paios_launcher"
 
 [tool.pytest.ini_options]
-pythonpath = ["backend", "frontend/desktop", "."]
+# installer/ ships in PAIOSSetup.exe, not in the wheel — pytest-only path.
+pythonpath = ["backend", "frontend/desktop", "launcher", "installer", "."]
 testpaths = ["tests"]
