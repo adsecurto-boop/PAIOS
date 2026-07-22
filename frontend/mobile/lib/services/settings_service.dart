@@ -10,10 +10,17 @@ class Settings {
   int refreshSeconds;
   bool darkTheme;
 
+  /// M21: the bearer token from device pairing (null = not paired).
+  /// The desktop shows it exactly once, so this copy is the only one.
+  String? deviceToken;
+  String deviceName;
+
   Settings({
     this.baseUrl = defaultBaseUrl,
     this.refreshSeconds = defaultRefreshSeconds,
     this.darkTheme = true,
+    this.deviceToken,
+    this.deviceName = '',
   });
 }
 
@@ -21,11 +28,16 @@ class SettingsService {
   static const _keyBaseUrl = 'base_url';
   static const _keyRefresh = 'refresh_seconds';
   static const _keyDark = 'dark_theme';
+  static const _keyDeviceToken = 'device_token';
+  static const _keyDeviceName = 'device_name';
   static const keyDashboardCache = 'dashboard_cache';
   static const keyNotifications = 'notification_history';
   static const keyEventsCache = 'events_cache';
   static const keyPlanCache = 'plan_cache';
   static const keyInboxCache = 'inbox_cache';
+  static const keyJournalCache = 'journal_cache';
+  static const keyStudyCache = 'study_cache';
+  static const keyOfflineQueue = 'offline_log_queue';
 
   final SharedPreferences _prefs;
 
@@ -39,12 +51,21 @@ class SettingsService {
         refreshSeconds:
             _prefs.getInt(_keyRefresh) ?? Settings.defaultRefreshSeconds,
         darkTheme: _prefs.getBool(_keyDark) ?? true,
+        deviceToken: _prefs.getString(_keyDeviceToken),
+        deviceName: _prefs.getString(_keyDeviceName) ?? '',
       );
 
   Future<void> write(Settings settings) async {
     await _prefs.setString(_keyBaseUrl, settings.baseUrl);
     await _prefs.setInt(_keyRefresh, settings.refreshSeconds);
     await _prefs.setBool(_keyDark, settings.darkTheme);
+    final token = settings.deviceToken;
+    if (token == null) {
+      await _prefs.remove(_keyDeviceToken); // "Forget pairing"
+    } else {
+      await _prefs.setString(_keyDeviceToken, token);
+    }
+    await _prefs.setString(_keyDeviceName, settings.deviceName);
   }
 
   String? readString(String key) => _prefs.getString(key);

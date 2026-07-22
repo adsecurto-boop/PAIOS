@@ -173,6 +173,64 @@ class TestAnthropicAdapter:
             AnthropicAdapter()
 
 
+class FakeOllamaTransport:
+    """Scripted (url-suffix -> reply/exception) transport."""
+
+    def __init__(self, chat_reply=None, probe_fails=False):
+        self.calls = []
+        self.chat_reply = chat_reply
+        self.probe_fails = probe_fails
+
+    def __call__(self, url, payload, timeout):
+        self.calls.append((url, payload))
+        if url.endswith("/api/version"):
+            if self.probe_fails:
+                raise OSError("connection refused")
+            return {"version": "0.5.0"}
+        if isinstance(self.chat_reply, Exception):
+            raise self.chat_reply
+        return self.chat_reply
+
+
+class TestOllamaAdapter:
+    def test_translates_request_and_response(self):
+        from paios.assistant.adapters.ollama import OllamaAdapter
+
+        reply = {"message": {"content": '{"answer": "ok"}'}}
+        transport = FakeOllamaTransport(chat_reply=reply)
+        adapter = OllamaAdapter(model="qwen2.5:7b", transport=transport)
+        assert adapter.complete(request()) == '{"answer": "ok"}'
+        chat_url, payload = transport.calls[-1]
+        assert chat_url.endswith("/api/chat")
+        assert payload["model"] == "qwen2.5:7b"
+        assert payload["stream"] is False
+        assert payload["messages"][0] == {
+            "role": "system", "content": "system",
+        }
+        assert payload["messages"][1] == {"role": "user", "content": "user"}
+        assert adapter.name == "ollama:qwen2.5:7b"
+
+    def test_unreachable_server_is_unavailable_at_construction(self):
+        from paios.assistant.adapters.ollama import OllamaAdapter
+
+        with pytest.raises(AdapterUnavailableError, match="ollama.com"):
+            OllamaAdapter(transport=FakeOllamaTransport(probe_fails=True))
+
+    def test_empty_content_becomes_adapter_error(self):
+        from paios.assistant.adapters.ollama import OllamaAdapter
+
+        transport = FakeOllamaTransport(chat_reply={"message": {}})
+        with pytest.raises(AdapterError, match="no text"):
+            OllamaAdapter(transport=transport).complete(request())
+
+    def test_transport_failure_becomes_adapter_error(self):
+        from paios.assistant.adapters.ollama import OllamaAdapter
+
+        transport = FakeOllamaTransport(chat_reply=OSError("timed out"))
+        with pytest.raises(AdapterError, match="timed out"):
+            OllamaAdapter(transport=transport).complete(request())
+
+
 class FakeOpenAIClient:
     def __init__(self, content):
         self.calls = []

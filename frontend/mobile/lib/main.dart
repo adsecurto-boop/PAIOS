@@ -9,11 +9,13 @@
 // drawer always carries the full list.
 import 'package:flutter/material.dart';
 
+import 'screens/assistant_screen.dart';
 import 'screens/contexts_screen.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/events_screen.dart';
 import 'screens/goals_screen.dart';
 import 'screens/inbox_screen.dart';
+import 'screens/journal_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/planning_screen.dart';
 import 'screens/projects_screen.dart';
@@ -21,6 +23,7 @@ import 'screens/recommendations_screen.dart';
 import 'screens/reflections_screen.dart';
 import 'screens/resources_screen.dart';
 import 'screens/settings_screen.dart';
+import 'screens/study_screen.dart';
 import 'screens/timeline_screen.dart';
 import 'services/app_state.dart';
 import 'services/settings_service.dart';
@@ -67,6 +70,9 @@ class _Destination {
   String get shortLabel => _short ?? title;
 }
 
+// Deliberate: the list is the app's internal navigation registry,
+// shared with the test suite.
+// ignore: library_private_types_in_public_api
 final List<_Destination> destinations = [
   _Destination('Today', Icons.today_outlined,
       (s) => PlanningScreen(state: s)),
@@ -76,6 +82,12 @@ final List<_Destination> destinations = [
       (s) => InboxScreen(state: s), short: 'Capture'),
   _Destination('Dashboard', Icons.dashboard_outlined,
       (s) => DashboardScreen(state: s)),
+  // M21: mobile companion screens (paired-device /mobile namespace).
+  _Destination('Daily Journal', Icons.menu_book_outlined,
+      (s) => JournalScreen(state: s), short: 'Journal'),
+  _Destination('Study', Icons.school_outlined, (s) => StudyScreen(state: s)),
+  _Destination('AI Assistant', Icons.smart_toy_outlined,
+      (s) => AssistantScreen(state: s), short: 'Assistant'),
   _Destination('Recommendations', Icons.lightbulb_outline,
       (s) => RecommendationsScreen(state: s)),
   _Destination('Events', Icons.play_circle_outline,

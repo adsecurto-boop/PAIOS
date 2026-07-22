@@ -1,9 +1,8 @@
-// Projects: read-only list with progress bars.
+﻿// Projects: read-only list with progress bars.
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
-import '../services/app_state.dart';
 import 'rest_list_screen.dart';
 
 class ProjectsScreen extends RestListScreen {
@@ -35,7 +34,7 @@ class ProjectsScreen extends RestListScreen {
         ],
       ),
       trailing: Text(project.completion == null
-          ? '—'
+          ? 'â€”'
           : '${project.completion!.toStringAsFixed(0)}%'),
     );
   }

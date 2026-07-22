@@ -1,9 +1,8 @@
-// Resources: read-only list.
+﻿// Resources: read-only list.
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
-import '../services/app_state.dart';
 import 'rest_list_screen.dart';
 
 class ResourcesScreen extends RestListScreen {

@@ -13,6 +13,7 @@ class MockPaios {
   late HttpServer server;
   final List<String> requests = [];
   final List<String> bodies = [];
+  final List<String?> authHeaders = []; // Authorization value per request
 
   String get url => 'http://127.0.0.1:${server.port}';
 
@@ -20,6 +21,7 @@ class MockPaios {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       requests.add('${request.method} ${request.uri.path}');
+      authHeaders.add(request.headers.value('authorization'));
       final body = await utf8.decoder.bind(request).join();
       bodies.add(body);
       final respond = request.response;
@@ -99,6 +101,63 @@ class MockPaios {
       } else if (route == 'POST /projects') {
         status = 201;
         payload = {'project_id': 'p9', 'echo': jsonDecode(body)};
+      }
+      // --- M21 mobile companion routes ------------------------------------
+      else if (route == 'POST /mobile/pair') {
+        final parsed = jsonDecode(body) as Map<String, dynamic>;
+        if (parsed['code'] == '123456') {
+          status = 201;
+          payload = mobilePairJson();
+        } else {
+          status = 401;
+          payload = {
+            'error': {'type': 'ApiError', 'message': 'Wrong pairing code.'}
+          };
+        }
+      } else if (route == 'POST /mobile/auth') {
+        final parsed = jsonDecode(body) as Map<String, dynamic>;
+        if (parsed['token'] == 'tok-secret-once') {
+          payload = {'device_id': 'device_abc123', 'valid': true};
+        } else {
+          status = 401;
+          payload = {
+            'error': {'type': 'ApiError', 'message': 'Invalid or revoked token'}
+          };
+        }
+      } else if (path.startsWith('/mobile/') &&
+          request.headers.value('authorization') != 'Bearer tok-secret-once') {
+        status = 401;
+        payload = {
+          'error': {
+            'type': 'ApiError',
+            'message': 'Not paired — pair this device from PAIOS on the desktop'
+          }
+        };
+      } else if (route == 'GET /mobile/timeline') {
+        payload = mobileTimelineJson();
+      } else if (route == 'GET /mobile/tasks') {
+        payload = {'server_time': '2026-07-21T09:00:00', 'events': eventsJson()};
+      } else if (route == 'POST /mobile/tasks') {
+        status = 201;
+        payload = createEventResponseJson(eventId: 'e14');
+      } else if (route == 'GET /mobile/logs' ||
+          route == 'GET /mobile/logs/2026-07-21') {
+        payload = {'entries': mobileLogsJson()};
+      } else if (route == 'POST /mobile/logs') {
+        status = 201;
+        final parsed = jsonDecode(body) as Map<String, dynamic>;
+        payload = {
+          'id': 'log9',
+          'kind': parsed['kind'],
+          'text': parsed['text'],
+          'created_at': '2026-07-21T09:00:00',
+          'day': '2026-07-21',
+          'client_id': parsed['client_id'],
+        };
+      } else if (route == 'GET /mobile/study') {
+        payload = mobileStudyJson();
+      } else if (route == 'POST /mobile/assistant/query') {
+        payload = assistantQueryJson();
       } else {
         status = 404;
         payload = {
@@ -296,6 +355,107 @@ void main() {
         'POST /assistant/explain-day',
       ]);
       expect(jsonDecode(mock.bodies[1]), {'text': 'sort my day'});
+    });
+  });
+
+  group('M21 mobile companion', () {
+    test('pairDevice posts the code and device name', () async {
+      final result = await client.pairDevice('123456', 'Pixel 9');
+      expect(result['device_id'], 'device_abc123');
+      expect(result['token'], 'tok-secret-once');
+      expect(mock.requests, ['POST /mobile/pair']);
+      expect(jsonDecode(mock.bodies.last),
+          {'code': '123456', 'device_name': 'Pixel 9'});
+    });
+
+    test('a wrong code surfaces the 401 message', () async {
+      try {
+        await client.pairDevice('000000', 'Pixel 9');
+        fail('expected ApiResponseException');
+      } on ApiResponseException catch (error) {
+        expect(error.status, 401);
+        expect(error.message, contains('Wrong pairing code'));
+      }
+    });
+
+    test('validateToken posts the stored token', () async {
+      final result = await client.validateToken('tok-secret-once');
+      expect(result['valid'], isTrue);
+      expect(mock.requests, ['POST /mobile/auth']);
+      expect(jsonDecode(mock.bodies.last), {'token': 'tok-secret-once'});
+    });
+
+    test('mobile calls carry the bearer token; legacy calls do not',
+        () async {
+      final paired = ApiClient(mock.url, authToken: 'tok-secret-once');
+      await paired.mobileTimeline();
+      await paired.getEvents();
+      paired.close();
+      expect(mock.requests, ['GET /mobile/timeline', 'GET /events']);
+      expect(mock.authHeaders, ['Bearer tok-secret-once', null]);
+    });
+
+    test('a missing token on a guarded endpoint is a 401', () async {
+      expect(
+        () => client.mobileTimeline(),
+        throwsA(isA<ApiResponseException>()
+            .having((e) => e.status, 'status', 401)),
+      );
+    });
+
+    test('timeline, tasks and study parse their envelopes', () async {
+      final paired = ApiClient(mock.url, authToken: 'tok-secret-once');
+      final timeline = await paired.mobileTimeline();
+      expect(timeline['day'], '2026-07-21');
+      expect(timeline['entries'], hasLength(1));
+      final tasks = await paired.mobileTasks();
+      expect(tasks['events'], hasLength(1));
+      final study = await paired.mobileStudy();
+      expect(study['knowledge'], hasLength(1));
+      expect(study['study_logs'], hasLength(1));
+      paired.close();
+    });
+
+    test('createMobileTask posts only the fields that were set', () async {
+      final paired = ApiClient(mock.url, authToken: 'tok-secret-once');
+      final created = await paired.createMobileTask(title: 'Pack bags');
+      expect(created['event_id'], 'e14');
+      expect(jsonDecode(mock.bodies.last), {'title': 'Pack bags'});
+      await paired.createMobileTask(title: 'Pack bags', priority: 7.0);
+      expect(jsonDecode(mock.bodies.last),
+          {'title': 'Pack bags', 'priority': 7.0});
+      paired.close();
+    });
+
+    test('mobileLogs routes the optional day segment', () async {
+      final paired = ApiClient(mock.url, authToken: 'tok-secret-once');
+      expect(await paired.mobileLogs(), hasLength(2));
+      expect(await paired.mobileLogs(day: '2026-07-21'), hasLength(2));
+      expect(mock.requests,
+          ['GET /mobile/logs', 'GET /mobile/logs/2026-07-21']);
+      paired.close();
+    });
+
+    test('createMobileLog forwards kind, text and client_id', () async {
+      final paired = ApiClient(mock.url, authToken: 'tok-secret-once');
+      final record = await paired.createMobileLog(
+          kind: 'journal', text: 'Good focus', clientId: 'mob-1-abc');
+      expect(record['id'], 'log9');
+      expect(record['client_id'], 'mob-1-abc');
+      expect(jsonDecode(mock.bodies.last),
+          {'kind': 'journal', 'text': 'Good focus', 'client_id': 'mob-1-abc'});
+      paired.close();
+    });
+
+    test('assistantQuery parses source and answer', () async {
+      final paired = ApiClient(mock.url, authToken: 'tok-secret-once');
+      final answer = await paired.assistantQuery('what first?');
+      expect(answer['source'], 'llm');
+      expect(answer['answer'], contains('report'));
+      expect(answer['bullets'], hasLength(2));
+      expect(mock.requests, ['POST /mobile/assistant/query']);
+      expect(jsonDecode(mock.bodies.last), {'text': 'what first?'});
+      paired.close();
     });
   });
 

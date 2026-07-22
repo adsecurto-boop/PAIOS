@@ -1,9 +1,8 @@
-// Goals: read-only list (creation stays on the desktop/CLI).
+﻿// Goals: read-only list (creation stays on the desktop/CLI).
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
-import '../services/app_state.dart';
 import 'rest_list_screen.dart';
 
 class GoalsScreen extends RestListScreen {
@@ -24,7 +23,7 @@ class GoalsScreen extends RestListScreen {
       title: Text(goal.name),
       subtitle: Text(goal.description.isEmpty
           ? goal.status
-          : '${goal.status} · ${goal.description}'),
+          : '${goal.status} Â· ${goal.description}'),
       leading: Icon(
         goal.status == 'Active' ? Icons.flag : Icons.outlined_flag,
       ),

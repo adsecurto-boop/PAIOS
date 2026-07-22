@@ -377,6 +377,80 @@ class BackupsPage(TablePage):
         )
 
 
+class MobileDevicesPage(TablePage):
+    """Phone pairing without a terminal: generate the 6-digit code,
+    see trusted devices, revoke one. Every button is one REST call."""
+
+    title = "Mobile"
+    columns = ("Device", "Paired", "Last seen")
+    empty_hint = (
+        "No phone paired yet. Click 'Generate pairing code', install"
+        " the PAIOS companion app on your phone, and enter the code in"
+        " its Settings → Pair with desktop."
+    )
+
+    def __init__(self, window) -> None:
+        super().__init__(window)
+        # The code panel sits between the toolbar and the table.
+        self.code_label = QLabel("")
+        self.code_label.setObjectName("todayHeader")
+        self.code_label.hide()
+        self.code_hint = QLabel("")
+        self.code_hint.setObjectName("subtitle")
+        self.code_hint.setWordWrap(True)
+        self.code_hint.hide()
+        layout = self.layout()
+        layout.insertWidget(2, self.code_label)
+        layout.insertWidget(3, self.code_hint)
+
+    def _build_toolbar(self) -> None:
+        self._add_button("Generate pairing code", self.on_generate)
+        self._add_button("Revoke device", self.on_revoke)
+
+    def fetch(self, client) -> list[dict]:
+        return client.mobile_devices()
+
+    def cells(self, row: dict) -> tuple[str, ...]:
+        return (
+            row.get("name") or "(unnamed device)",
+            fmt.day_time(row.get("paired_at")),
+            fmt.day_time(row.get("last_seen")),
+        )
+
+    def on_generate(self) -> None:
+        def call() -> None:
+            payload = self._window.client.mobile_pairing_start()
+            code = payload.get("code", "")
+            self.code_label.setText(f"Pairing code:  {code}")
+            self.code_label.show()
+            self.code_hint.setText(
+                "Enter this code in the phone app within 5 minutes"
+                " (Settings → Pair with desktop). The phone must be on"
+                " the same network and the code works once."
+            )
+            self.code_hint.show()
+
+        self._window.run_action(call, "Pairing code generated")
+
+    def on_revoke(self) -> None:
+        row = self._require_selection()
+        if row is None:
+            return
+        name = row.get("name") or row.get("device_id", "device")
+        if not confirm(
+            self,
+            "Revoke device",
+            f"Revoke '{name}'? The phone will need to pair again.",
+        ):
+            return
+        self._window.run_action(
+            lambda: self._window.client.mobile_revoke_device(
+                row["device_id"]
+            ),
+            f"Device revoked: {name}",
+        )
+
+
 class SettingsPage(QWidget):
     """Refresh interval (the configurable poll) and connection info."""
 

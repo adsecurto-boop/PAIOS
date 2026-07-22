@@ -16,6 +16,7 @@ from paios_installer.steps import (
     InstallerError,
     InstallLog,
     InstallOptions,
+    PUBLISHER,
     RUN_VALUE_NAME,
     SHORTCUT_NAME,
     START_MENU_FOLDER,
@@ -58,6 +59,7 @@ class FakeRunner:
 class FakeRegistry:
     def __init__(self):
         self.values = {}
+        self.uninstall_entry = None
 
     def set_run_value(self, name, command):
         self.values[name] = command
@@ -67,6 +69,15 @@ class FakeRegistry:
 
     def get_run_value(self, name):
         return self.values.get(name)
+
+    def set_uninstall_entry(self, values):
+        self.uninstall_entry = dict(values)
+
+    def delete_uninstall_entry(self):
+        self.uninstall_entry = None
+
+    def get_uninstall_entry(self):
+        return self.uninstall_entry
 
 
 @pytest.fixture
@@ -338,3 +349,185 @@ class TestUninstall:
         assert (install_dir / "backups").is_dir()
         assert not (install_dir / "config").exists()
         assert not (install_dir / "PAIOS.exe").exists()
+
+
+@pytest.fixture
+def standalone_harness(tmp_path):
+    """A payload with an app/ tree — the consumer product install."""
+    install_dir = tmp_path / "Programs" / "PAIOS"
+    data_dir = tmp_path / "LocalAppData" / "PAIOS"
+    payload = tmp_path / "payload"
+    app = payload / "app"
+    (app / "_internal").mkdir(parents=True)
+    (app / "PAIOS.exe").write_bytes(b"launcher")
+    (app / "PAIOSUpdater.exe").write_bytes(b"updater")
+    (app / "PAIOSUninstall.exe").write_bytes(b"uninstaller")
+    (app / "_internal" / "base_library.zip").write_bytes(b"lib")
+    (app / "version.txt").write_text("2.3.0\n", encoding="utf-8")
+    runner = FakeRunner()
+    registry = FakeRegistry()
+    options = InstallOptions(
+        install_dir=install_dir,
+        payload_dir=payload,
+        user_data_dir=data_dir,
+    )
+    installer = Installer(
+        options,
+        runner=runner,
+        registry=registry,
+        log=InstallLog(tmp_path / "log" / "install.log", echo=lambda m: None),
+        desktop=tmp_path / "Desktop",
+        start_menu=tmp_path / "StartMenu",
+    )
+    return SimpleNamespace(
+        installer=installer,
+        runner=runner,
+        registry=registry,
+        options=options,
+        data_dir=data_dir,
+        tmp=tmp_path,
+    )
+
+
+class TestStandaloneInstall:
+    def test_no_python_venv_or_pip_involved(self, standalone_harness):
+        standalone_harness.installer.run()
+        # Only shortcut creation and the PAIOS.exe health check touch
+        # the machine — no Python check, no venv, no pip install.
+        heads = [
+            command[0]
+            for command in standalone_harness.runner.commands()
+        ]
+        assert all(
+            head == "powershell" or head.endswith("PAIOS.exe")
+            for head in heads
+        )
+        assert not any(
+            "-m" in command
+            for command in standalone_harness.runner.commands()
+        )
+
+    def test_application_tree_copied_with_version(self, standalone_harness):
+        standalone_harness.installer.run()
+        install_dir = standalone_harness.options.install_dir
+        assert (install_dir / "PAIOS.exe").read_bytes() == b"launcher"
+        assert (install_dir / "PAIOSUpdater.exe").is_file()
+        assert (install_dir / "PAIOSUninstall.exe").is_file()
+        assert (install_dir / "_internal" / "base_library.zip").is_file()
+        assert (install_dir / "version.txt").read_text(
+            encoding="utf-8"
+        ).strip() == "2.3.0"
+
+    def test_user_data_layout_created_outside_the_app(
+        self, standalone_harness
+    ):
+        standalone_harness.installer.run()
+        for name in ("config", "data", "logs", "backups"):
+            assert (standalone_harness.data_dir / name).is_dir()
+
+    def test_uninstall_entry_registered_with_version_and_publisher(
+        self, standalone_harness
+    ):
+        standalone_harness.installer.run()
+        entry = standalone_harness.registry.get_uninstall_entry()
+        assert entry is not None
+        assert entry["DisplayName"] == "PAIOS"
+        assert entry["DisplayVersion"] == "2.3.0"
+        assert entry["Publisher"] == PUBLISHER
+        assert "PAIOSUninstall.exe" in entry["UninstallString"]
+
+    def test_upgrade_is_detected_and_logged(self, standalone_harness):
+        install_dir = standalone_harness.options.install_dir
+        install_dir.mkdir(parents=True)
+        (install_dir / "version.txt").write_text(
+            "2.2.0\n", encoding="utf-8"
+        )
+        (install_dir / "PAIOS.exe").write_bytes(b"old")
+        standalone_harness.installer.run()
+        log_text = standalone_harness.installer.log.path.read_text(
+            encoding="utf-8"
+        )
+        assert "upgrading PAIOS 2.2.0 -> 2.3.0" in log_text
+        # The running instance was asked to stop first.
+        assert any(
+            "--stop" in command
+            for command in standalone_harness.runner.commands()
+        )
+        # And the new files replaced the old.
+        assert (install_dir / "PAIOS.exe").read_bytes() == b"launcher"
+
+    def test_shortcuts_point_at_the_installed_launcher(
+        self, standalone_harness
+    ):
+        standalone_harness.installer.run()
+        scripts = [
+            command[-1]
+            for command in standalone_harness.runner.commands()
+            if command[0] == "powershell"
+        ]
+        assert len(scripts) == 2
+        target = str(standalone_harness.options.install_dir / "PAIOS.exe")
+        assert all(target in script for script in scripts)
+
+
+class TestStandaloneUninstall:
+    def build(self, standalone_harness, remove_user_data):
+        standalone_harness.installer.run()
+        (standalone_harness.data_dir / "data" / "events.json").write_text(
+            "[]", encoding="utf-8"
+        )
+        return Uninstaller(
+            standalone_harness.options.install_dir,
+            remove_user_data=remove_user_data,
+            user_data_dir=standalone_harness.data_dir,
+            runner=standalone_harness.runner,
+            registry=standalone_harness.registry,
+            log=InstallLog(
+                standalone_harness.tmp / "uninstall.log",
+                echo=lambda m: None,
+            ),
+            desktop=standalone_harness.tmp / "Desktop",
+            start_menu=standalone_harness.tmp / "StartMenu",
+        )
+
+    def test_keep_data_answer_preserves_the_data_home(
+        self, standalone_harness
+    ):
+        uninstaller = self.build(standalone_harness, remove_user_data=False)
+        uninstaller.run()
+        assert not standalone_harness.options.install_dir.exists()
+        assert standalone_harness.registry.get_uninstall_entry() is None
+        assert (
+            standalone_harness.data_dir / "data" / "events.json"
+        ).is_file()
+
+    def test_remove_data_answer_deletes_the_data_home(
+        self, standalone_harness
+    ):
+        uninstaller = self.build(standalone_harness, remove_user_data=True)
+        uninstaller.run()
+        assert not standalone_harness.options.install_dir.exists()
+        assert not standalone_harness.data_dir.exists()
+
+
+class TestUninstallPrompt:
+    def test_default_and_yes_keep_the_data(self):
+        from paios_installer.__main__ import ask_keep_data
+
+        assert ask_keep_data(ask=lambda prompt: "") is True
+        assert ask_keep_data(ask=lambda prompt: "y") is True
+        assert ask_keep_data(ask=lambda prompt: "yes") is True
+
+    def test_explicit_no_removes_the_data(self):
+        from paios_installer.__main__ import ask_keep_data
+
+        assert ask_keep_data(ask=lambda prompt: "n") is False
+        assert ask_keep_data(ask=lambda prompt: "NO") is False
+
+    def test_unanswerable_prompt_keeps_the_data(self):
+        from paios_installer.__main__ import ask_keep_data
+
+        def raise_eof(prompt):
+            raise EOFError
+
+        assert ask_keep_data(ask=raise_eof) is True

@@ -11,6 +11,9 @@ scheduler, decision-engine, learning, or repository-implementation
 module is imported.
 """
 
+import os
+from datetime import timedelta
+
 from paios.application.application import Application
 from paios.domain.enums import (
     DisturberSeverity,
@@ -25,7 +28,14 @@ from paios.domain.value_objects.identifiers import (
     ResourceId,
     UserId,
 )
-from paios.api import assistant_support, schemas, serialization
+from paios.api import (
+    ai_settings,
+    assistant_support,
+    mobile_support,
+    ollama_support,
+    schemas,
+    serialization,
+)
 from paios.api.errors import ApiError, translate
 from paios.planning.service import PlanningService
 from paios.system.backup import BackupManager
@@ -54,6 +64,8 @@ class ApiRouter:
         assistant=None,
         assistant_provider: str = "none",
         assistant_reason: str | None = None,
+        mobile=None,
+        ai_dir=None,
     ) -> None:
         self._app = application
         self._planning = planning
@@ -70,6 +82,15 @@ class ApiRouter:
                 + assistant_support.CONFIG_HINT
             )
         )
+        #: Mobile companion collaborators (None -> /mobile 503s).
+        self._mobile = mobile
+        #: Where ai-settings.json lives (None -> settings routes 503).
+        self._ai_dir = ai_dir
+        # Per-request transport context. The HTTP server is deliberately
+        # single-threaded (see server.py), so stashing per request is
+        # safe; tests calling handle() directly are sequential too.
+        self._request_headers: dict | None = None
+        self._request_client: str | None = None
 
     def _require_planning(self) -> PlanningService:
         if self._planning is None:
@@ -83,11 +104,23 @@ class ApiRouter:
 
     # --- dispatch --------------------------------------------------------
 
-    def handle(self, method: str, path: str, body=None) -> tuple[int, dict]:
+    def handle(
+        self,
+        method: str,
+        path: str,
+        body=None,
+        headers: dict | None = None,
+        client_host: str | None = None,
+    ) -> tuple[int, dict]:
+        self._request_headers = headers
+        self._request_client = client_host
         try:
             return self._dispatch(method.upper(), path, body)
         except Exception as error:  # translated, never propagated
             return translate(error)
+        finally:
+            self._request_headers = None
+            self._request_client = None
 
     def _dispatch(self, method: str, path: str, body) -> tuple[int, dict]:
         segments = tuple(
@@ -427,6 +460,397 @@ class ApiRouter:
             "available": self._assistant is not None,
             "fallback": "heuristic",
             "reason": self._assistant_reason,
+        }
+
+    # --- intelligence layer: setup + settings (transport concern) ----------
+
+    def _require_ai_dir(self):
+        if self._ai_dir is None:
+            raise ApiError(503, "AI settings are not composed")
+        return self._ai_dir
+
+    def _get_assistant_setup(self, params, body):
+        """Hardware, model recommendations and Ollama state — the one
+        call behind "Choose your PAIOS Intelligence Mode"."""
+        return 200, ollama_support.setup_report()
+
+    def _get_assistant_ollama(self, params, body):
+        return 200, ollama_support.status()
+
+    def _post_assistant_ollama_pull(self, params, body):
+        model = schemas.require_string(body, "model")
+        return 200, ollama_support.start_pull(model)
+
+    def _post_assistant_ollama_remove(self, params, body):
+        model = schemas.require_string(body, "model")
+        return 200, ollama_support.remove_model(model)
+
+    def _get_assistant_config(self, params, body):
+        ai_dir = self._require_ai_dir()
+        stored = ai_settings.load(ai_dir)
+        return 200, {
+            "provider": self._assistant_provider,
+            "model": stored.get("model"),
+            "providers": list(assistant_support.PROVIDERS),
+            "stored_keys": {
+                provider: ai_settings.has_stored_key(ai_dir, provider)
+                for provider in ai_settings.KEY_VARIABLES
+            },
+            "env_override": bool(os.environ.get("PAIOS_AI_PROVIDER")),
+            "available": self._assistant is not None,
+            "reason": self._assistant_reason,
+        }
+
+    def _put_assistant_config(self, params, body):
+        """Persist provider/model (and optionally a cloud API key),
+        then recompose the assistant live — no restart needed. The
+        heuristic fallback is untouched by any outcome here."""
+        ai_dir = self._require_ai_dir()
+        provider = schemas.require_string(body, "provider").strip().lower()
+        if provider not in assistant_support.PROVIDERS:
+            raise ApiError(
+                400,
+                "Field 'provider' must be one of: "
+                + ", ".join(assistant_support.PROVIDERS),
+            )
+        model = schemas.optional_string(body, "model")
+        api_key = schemas.optional_string(body, "api_key")
+        key_warning = None
+        if api_key:
+            if provider not in ai_settings.KEY_VARIABLES:
+                raise ApiError(
+                    400, f"Provider {provider!r} takes no API key"
+                )
+            if not ai_settings.store_api_key(ai_dir, provider, api_key):
+                key_warning = (
+                    "Secure key storage is unavailable on this platform"
+                    " — set the "
+                    + ai_settings.KEY_VARIABLES[provider]
+                    + " environment variable instead. The key was NOT"
+                    " stored."
+                )
+        ai_settings.save(ai_dir, {"provider": provider, "model": model})
+        stored_key = ai_settings.api_key_for(ai_dir, provider)
+        (
+            self._assistant_provider,
+            self._assistant,
+            self._assistant_reason,
+        ) = assistant_support.compose_assistant(
+            provider, model, api_key=stored_key
+        )
+        payload = {
+            "provider": self._assistant_provider,
+            "available": self._assistant is not None,
+            "fallback": "heuristic",
+            "reason": self._assistant_reason,
+        }
+        if key_warning:
+            payload["warning"] = key_warning
+        return 200, payload
+
+    def _post_assistant_test(self, params, body):
+        """One tiny round trip proving the configured provider answers.
+        Deterministic reply when no provider is active."""
+        if self._assistant is None:
+            return 200, {
+                "source": "heuristic",
+                "ok": True,
+                "answer": (
+                    "No AI provider is active — PAIOS is answering"
+                    " deterministically, which always works."
+                ),
+                "reason": self._assistant_reason,
+            }
+        try:
+            result = self._assistant.answer_question(
+                "Reply with one short sentence confirming the PAIOS"
+                " assistant is reachable."
+            )
+        except assistant_support.FALLBACK_ERRORS as error:
+            return 200, {
+                "source": "llm",
+                "ok": False,
+                "answer": f"The provider did not answer: {error}",
+            }
+        return 200, {
+            "source": "llm",
+            "ok": True,
+            "adapter": result.adapter,
+            "answer": result.answer,
+        }
+
+    # --- intelligence layer: daily-rhythm workflows ------------------------
+    # Read-only observations in both paths (LLM or deterministic); the
+    # Scheduler and Decision Engine remain the only authorities.
+
+    def _today(self) -> str:
+        return self._app.current_time().isoformat()[:10]
+
+    def _plan_lines(self) -> list[str]:
+        entries = assistant_support.deterministic_day_reasons(
+            self._app, self._require_planning()
+        )
+        return [
+            f"{entry['planned_start'][11:16]} {entry['title']}"
+            f" ({entry['reason']})"
+            for entry in entries
+        ]
+
+    def _post_assistant_morning_plan(self, params, body):
+        check_in = {
+            "sleep_hours": schemas.optional_number(body, "sleep_hours"),
+            "mood": schemas.optional_string(body, "mood"),
+            "energy": schemas.optional_string(body, "energy"),
+            "notes": schemas.optional_string(body, "notes"),
+        }
+        fallback = assistant_support.heuristic_morning_payload(
+            self._app, self._require_planning(), check_in, self._today()
+        )
+        if self._assistant is None:
+            return 200, fallback
+        try:
+            check_in_text = "; ".join(
+                f"{name}: {value}"
+                for name, value in check_in.items()
+                if value is not None
+            )
+            result = self._assistant.morning_plan(
+                check_in_text,
+                self._plan_lines(),
+                snapshot=self._app.snapshot(),
+                goals=self._app.list_goals(),
+            )
+        except assistant_support.FALLBACK_ERRORS:
+            return 200, fallback
+        return 200, {
+            "source": "llm",
+            "adapter": result.adapter,
+            "answer": result.answer,
+            "bullets": list(result.bullets),
+            "timeline": fallback["timeline"],
+            "priorities": fallback["priorities"],
+            "risks": fallback["risks"],
+            "confidence": result.confidence,
+        }
+
+    def _post_assistant_evening_review(self, params, body):
+        check_in = {
+            "notes": schemas.optional_string(body, "notes"),
+            "productivity": schemas.optional_number(body, "productivity"),
+        }
+        fallback = assistant_support.heuristic_evening_payload(
+            self._app, check_in, self._today()
+        )
+        if self._assistant is None:
+            return 200, fallback
+        try:
+            today_lines = [
+                f"completed: {title}" for title in fallback["completed"]
+            ] + [f"planned tomorrow: {t}" for t in fallback["tomorrow"]]
+            check_in_text = "; ".join(
+                f"{name}: {value}"
+                for name, value in check_in.items()
+                if value is not None
+            )
+            result = self._assistant.evening_review(
+                check_in_text,
+                today_lines,
+                snapshot=self._app.snapshot(),
+            )
+        except assistant_support.FALLBACK_ERRORS:
+            return 200, fallback
+        return 200, {
+            "source": "llm",
+            "adapter": result.adapter,
+            "answer": result.answer,
+            "bullets": list(result.bullets),
+            "completed": fallback["completed"],
+            "improvements": fallback["improvements"],
+            "tomorrow": fallback["tomorrow"],
+            "confidence": result.confidence,
+        }
+
+    def _post_assistant_weekly_review(self, params, body):
+        today = self._app.current_time()
+        week_days = [
+            (today - timedelta(days=offset)).isoformat()[:10]
+            for offset in range(6, -1, -1)
+        ]
+        fallback = assistant_support.heuristic_weekly_payload(
+            self._app, week_days
+        )
+        if self._assistant is None:
+            return 200, fallback
+        try:
+            result = self._assistant.summarize_week(
+                events=self._app.list_events(),
+                goals=self._app.list_goals(),
+                projects=self._app.list_projects(),
+            )
+        except assistant_support.FALLBACK_ERRORS:
+            return 200, fallback
+        return 200, {
+            "source": "llm",
+            "adapter": result.adapter,
+            "answer": result.answer,
+            "bullets": list(result.bullets),
+            "per_day": fallback["per_day"],
+            "confidence": result.confidence,
+        }
+
+    # --- mobile companion (paired devices only) -----------------------------
+
+    def _require_mobile(self) -> "mobile_support.PairingService":
+        if self._mobile is None:
+            raise ApiError(503, "Mobile services are not composed")
+        return self._mobile
+
+    def _require_loopback(self) -> None:
+        if not mobile_support.is_loopback(self._request_client):
+            raise ApiError(
+                403, "Pairing administration is desktop-only"
+            )
+
+    def _require_device(self) -> str:
+        token = mobile_support.bearer_token(self._request_headers)
+        device_id = self._require_mobile().authenticate(
+            token, self._app.current_time()
+        )
+        if device_id is None:
+            raise ApiError(
+                401,
+                "Not paired — pair this device from PAIOS on the desktop",
+            )
+        return device_id
+
+    def _post_mobile_pairing_start(self, params, body):
+        self._require_loopback()
+        return 200, self._require_mobile().begin(self._app.current_time())
+
+    def _get_mobile_devices(self, params, body):
+        self._require_loopback()
+        return 200, {"devices": self._require_mobile().devices()}
+
+    def _delete_mobile_device(self, params, body):
+        self._require_loopback()
+        if not self._require_mobile().revoke(params["id"]):
+            raise ApiError(404, f"Unknown device: {params['id']}")
+        return 200, {"result": "revoked"}
+
+    def _post_mobile_pair(self, params, body):
+        try:
+            device_id, token = self._require_mobile().complete(
+                schemas.require_string(body, "code"),
+                schemas.optional_string(body, "device_name") or "",
+                self._app.current_time(),
+            )
+        except mobile_support.MobileAuthError as error:
+            raise ApiError(401, str(error)) from error
+        return 201, {"device_id": device_id, "token": token}
+
+    def _post_mobile_auth(self, params, body):
+        token = schemas.require_string(body, "token")
+        device_id = self._require_mobile().authenticate(
+            token, self._app.current_time()
+        )
+        if device_id is None:
+            raise ApiError(401, "Invalid or revoked token")
+        return 200, {"device_id": device_id, "valid": True}
+
+    def _get_mobile_timeline(self, params, body):
+        self._require_device()
+        entries = assistant_support.deterministic_day_reasons(
+            self._app, self._require_planning()
+        )
+        return 200, {
+            "server_time": self._app.current_time().isoformat(),
+            "day": self._today(),
+            "entries": entries,
+        }
+
+    def _get_mobile_tasks(self, params, body):
+        self._require_device()
+        return 200, {
+            "server_time": self._app.current_time().isoformat(),
+            "events": [
+                serialization.serialize_event(event)
+                for event in self._app.list_events()
+            ],
+        }
+
+    def _post_mobile_tasks(self, params, body):
+        self._require_device()
+        return self._post_events(params, body)
+
+    def _get_mobile_logs(self, params, body):
+        self._require_device()
+        return 200, {
+            "entries": self._require_planning().logs.list(
+                day=params.get("day")
+            )
+        }
+
+    def _post_mobile_logs(self, params, body):
+        self._require_device()
+        explicit_at = schemas.optional_datetime(body, "at")
+        record = self._require_planning().logs.add(
+            schemas.optional_string(body, "kind") or "journal",
+            schemas.require_string(body, "text"),
+            explicit_at
+            if explicit_at is not None
+            else self._app.current_time(),
+            client_id=schemas.optional_string(body, "client_id"),
+            extra=schemas.optional_object(body, "extra"),
+        )
+        return 201, record
+
+    def _get_mobile_study(self, params, body):
+        self._require_device()
+        return 200, {
+            "knowledge": [
+                serialization.serialize_knowledge(item)
+                for item in self._app.list_knowledge()
+            ],
+            "study_logs": self._require_planning().logs.list(kind="study"),
+        }
+
+    def _post_mobile_assistant_query(self, params, body):
+        self._require_device()
+        question = schemas.require_string(body, "text")
+        if self._assistant is None:
+            return 200, {
+                "source": "heuristic",
+                "answer": (
+                    "No AI provider is configured on the desktop."
+                    " PAIOS still plans deterministically — configure"
+                    " an intelligence mode in desktop Settings for"
+                    " conversational answers."
+                ),
+                "bullets": [],
+                "confidence": None,
+            }
+        try:
+            result = self._assistant.answer_question(
+                question,
+                snapshot=self._app.snapshot(),
+                goals=self._app.list_goals(),
+                projects=self._app.list_projects(),
+                events=self._app.list_events(),
+            )
+        except assistant_support.FALLBACK_ERRORS as error:
+            return 200, {
+                "source": "heuristic",
+                "answer": f"The AI provider did not answer ({error})."
+                " Try again, or check desktop Settings.",
+                "bullets": [],
+                "confidence": None,
+            }
+        return 200, {
+            "source": "llm",
+            "adapter": result.adapter,
+            "answer": result.answer,
+            "bullets": list(result.bullets),
+            "confidence": result.confidence,
         }
 
     def _post_assistant_plan(self, params, body):
@@ -840,6 +1264,67 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
         "POST",
         ("assistant", "explain-day"),
         ApiRouter._post_assistant_explain_day,
+    ),
+    # --- intelligence layer: setup, settings, daily rhythm -----------------
+    ("GET", ("assistant", "setup"), ApiRouter._get_assistant_setup),
+    ("GET", ("assistant", "ollama"), ApiRouter._get_assistant_ollama),
+    (
+        "POST",
+        ("assistant", "ollama", "pull"),
+        ApiRouter._post_assistant_ollama_pull,
+    ),
+    (
+        "POST",
+        ("assistant", "ollama", "remove"),
+        ApiRouter._post_assistant_ollama_remove,
+    ),
+    ("GET", ("assistant", "config"), ApiRouter._get_assistant_config),
+    ("PUT", ("assistant", "config"), ApiRouter._put_assistant_config),
+    ("POST", ("assistant", "test"), ApiRouter._post_assistant_test),
+    (
+        "POST",
+        ("assistant", "morning-plan"),
+        ApiRouter._post_assistant_morning_plan,
+    ),
+    (
+        "POST",
+        ("assistant", "evening-review"),
+        ApiRouter._post_assistant_evening_review,
+    ),
+    (
+        "POST",
+        ("assistant", "weekly-review"),
+        ApiRouter._post_assistant_weekly_review,
+    ),
+    # --- mobile companion (paired devices; pairing admin loopback-only) ----
+    (
+        "POST",
+        ("mobile", "pairing", "start"),
+        ApiRouter._post_mobile_pairing_start,
+    ),
+    (
+        "GET",
+        ("mobile", "pairing", "devices"),
+        ApiRouter._get_mobile_devices,
+    ),
+    (
+        "DELETE",
+        ("mobile", "pairing", "devices", "{id}"),
+        ApiRouter._delete_mobile_device,
+    ),
+    ("POST", ("mobile", "pair"), ApiRouter._post_mobile_pair),
+    ("POST", ("mobile", "auth"), ApiRouter._post_mobile_auth),
+    ("GET", ("mobile", "timeline"), ApiRouter._get_mobile_timeline),
+    ("GET", ("mobile", "tasks"), ApiRouter._get_mobile_tasks),
+    ("POST", ("mobile", "tasks"), ApiRouter._post_mobile_tasks),
+    ("GET", ("mobile", "logs"), ApiRouter._get_mobile_logs),
+    ("GET", ("mobile", "logs", "{day}"), ApiRouter._get_mobile_logs),
+    ("POST", ("mobile", "logs"), ApiRouter._post_mobile_logs),
+    ("GET", ("mobile", "study"), ApiRouter._get_mobile_study),
+    (
+        "POST",
+        ("mobile", "assistant", "query"),
+        ApiRouter._post_mobile_assistant_query,
     ),
     ("GET", ("backups",), ApiRouter._get_backups),
     ("POST", ("backups",), ApiRouter._post_backups),

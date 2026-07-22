@@ -31,8 +31,15 @@ class ApiClient {
   final Duration timeout;
   final http.Client _http;
 
+  /// M21: the bearer token minted by device pairing. When present it is
+  /// sent as `Authorization: Bearer <token>` on `/mobile` calls only;
+  /// every legacy endpoint stays exactly as it was (additive contract).
+  String? authToken;
+
   ApiClient(String url,
-      {this.timeout = const Duration(seconds: 5), http.Client? client})
+      {this.timeout = const Duration(seconds: 5),
+      http.Client? client,
+      this.authToken})
       : baseUrl = _normalize(url),
         _http = client ?? http.Client();
 
@@ -50,12 +57,16 @@ class ApiClient {
   Future<dynamic> _request(String method, String path,
       [Map<String, dynamic>? body]) async {
     final uri = Uri.parse('$baseUrl$path');
-    const headers = {'Content-Type': 'application/json; charset=utf-8'};
+    final headers = <String, String>{
+      'Content-Type': 'application/json; charset=utf-8',
+      if (authToken != null && path.startsWith('/mobile'))
+        'Authorization': 'Bearer $authToken',
+    };
     http.Response response;
     try {
       switch (method) {
         case 'GET':
-          response = await _http.get(uri).timeout(timeout);
+          response = await _http.get(uri, headers: headers).timeout(timeout);
         case 'PUT':
           response = await _http
               .put(uri, headers: headers, body: jsonEncode(body ?? {}))
@@ -295,5 +306,63 @@ class ApiClient {
 
   Future<Map<String, dynamic>> assistantExplainDay() async =>
       await _request('POST', '/assistant/explain-day', {})
+          as Map<String, dynamic>;
+
+  // --- M21: mobile companion (paired-device namespace) ---------------------
+  //
+  // Every endpoint below lives under /mobile. Pairing and token
+  // validation are open; everything else requires the bearer token
+  // ([authToken]) and answers 401 when it is missing or revoked.
+
+  /// Exchanges the 6-digit desktop code for a device token. The token
+  /// is shown exactly once - the caller must store it (Settings).
+  Future<Map<String, dynamic>> pairDevice(
+          String code, String deviceName) async =>
+      await _request('POST', '/mobile/pair',
+          {'code': code, 'device_name': deviceName}) as Map<String, dynamic>;
+
+  /// Checks a stored token (app start / Settings "Test connection").
+  Future<Map<String, dynamic>> validateToken(String token) async =>
+      await _request('POST', '/mobile/auth', {'token': token})
+          as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> mobileTimeline() async =>
+      await _request('GET', '/mobile/timeline') as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> mobileTasks() async =>
+      await _request('GET', '/mobile/tasks') as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> createMobileTask(
+          {required String title, double? priority}) async =>
+      await _request('POST', '/mobile/tasks', {
+        'title': title,
+        if (priority != null) 'priority': priority,
+      }) as Map<String, dynamic>;
+
+  Future<List<Map<String, dynamic>>> mobileLogs({String? day}) =>
+      _list(day == null ? '/mobile/logs' : '/mobile/logs/$day', 'entries');
+
+  /// Idempotent by [clientId]: resubmitting the same client_id returns
+  /// the original record - the offline-queue contract.
+  Future<Map<String, dynamic>> createMobileLog({
+    required String kind,
+    required String text,
+    String? at,
+    String? clientId,
+  }) async =>
+      await _request('POST', '/mobile/logs', {
+        'kind': kind,
+        'text': text,
+        if (at != null) 'at': at,
+        if (clientId != null) 'client_id': clientId,
+      }) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> mobileStudy() async =>
+      await _request('GET', '/mobile/study') as Map<String, dynamic>;
+
+  /// One question, one answer. source=="heuristic" means the desktop
+  /// has no AI provider - still an answer, never an error.
+  Future<Map<String, dynamic>> assistantQuery(String text) async =>
+      await _request('POST', '/mobile/assistant/query', {'text': text})
           as Map<String, dynamic>;
 }

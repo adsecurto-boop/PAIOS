@@ -52,15 +52,15 @@ class TestNavigation:
         assert normalized == [
             "Planning", "Timeline", "Inbox", "Dashboard", "Goals",
             "Projects", "Events", "Resources", "Knowledge", "Learning",
-            "History", "Backups", "Logs", "Notifications", "Settings",
-            "Refresh",
+            "History", "Backups", "Logs", "Notifications", "Mobile",
+            "Settings", "Refresh",
         ]
-        for row in range(15):
+        for row in range(16):
             window.navigation.setCurrentRow(row)
             assert window.pages.currentIndex() == row
         # The trailing Refresh entry refreshes and bounces back.
-        window.navigation.setCurrentRow(15)
-        assert window.pages.currentIndex() == 14
+        window.navigation.setCurrentRow(16)
+        assert window.pages.currentIndex() == 15
 
     def test_planning_is_the_startup_page(self, window):
         assert window.pages.currentIndex() == 0

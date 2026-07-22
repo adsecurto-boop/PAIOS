@@ -14,6 +14,7 @@ from paios.domain.value_objects.identifiers import ProjectId, UserId
 from paios.planning.intents import EventIntent
 from paios.planning.stores import (
     WEEKDAYS,
+    DailyLogStore,
     EventMetadataStore,
     InboxStore,
     PlanningStoreError,
@@ -29,6 +30,7 @@ class PlanningService:
         self.metadata = EventMetadataStore(planning_dir)
         self.templates = TemplateStore(planning_dir)
         self.recurrences = RecurrenceStore(planning_dir)
+        self.logs = DailyLogStore(planning_dir)
 
     # --- templates -> intents ---------------------------------------------
 

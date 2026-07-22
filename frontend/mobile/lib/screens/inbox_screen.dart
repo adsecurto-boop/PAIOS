@@ -362,7 +362,10 @@ class _InboxScreenState extends State<InboxScreen> {
     final convertible =
         suggestion != null && suggestion != 'inbox' && suggestion.isNotEmpty;
     return Dismissible(
-      key: ValueKey('inbox-${item.id}'),
+      // The status is part of the key: an archived item returning on
+      // the next poll must be a NEW widget, never the dismissed one
+      // (Flutter asserts if a dismissed Dismissible re-enters the tree).
+      key: ValueKey('inbox-${item.id}-${item.status}'),
       background: Container(
         color: scheme.secondaryContainer,
         alignment: Alignment.centerLeft,

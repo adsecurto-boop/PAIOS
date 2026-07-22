@@ -214,6 +214,10 @@ void main() {
     expect(log.requests, contains('POST /events'));
     expect(jsonDecode(log.bodies.last), {'title': 'Ship it'});
 
+    // Let the success SnackBar expire — it overlaps the FAB.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
     // With duration and tags -> metadata carries only those fields.
     await tester.tap(find.byType(FloatingActionButton));
     await tester.pumpAndSettle();

@@ -17,8 +17,9 @@ from typing import TextIO
 
 from paios.application.application import Application
 from paios.application.config import ApplicationConfig
-from paios.api import assistant_support
+from paios.api import ai_settings, assistant_support
 from paios.api.config import ApiConfig
+from paios.api.mobile_support import PairingService
 from paios.api.errors import payload as error_payload
 from paios.api.routes import ApiRouter
 from paios.planning.metadata_planner import MetadataPlanner
@@ -62,8 +63,18 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
             )
             raise _BadBody()
 
+    def _context(self) -> dict:
+        """Transport context for the router: auth headers (mobile
+        bearer tokens) and the client address (loopback-only routes)."""
+        return {
+            "headers": dict(self.headers.items()),
+            "client_host": self.client_address[0],
+        }
+
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
-        status, body = self._router().handle("GET", self.path)
+        status, body = self._router().handle(
+            "GET", self.path, **self._context()
+        )
         self._respond(status, body)
 
     def do_POST(self) -> None:  # noqa: N802
@@ -71,7 +82,9 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
             body = self._read_body()
         except _BadBody:
             return
-        status, response = self._router().handle("POST", self.path, body)
+        status, response = self._router().handle(
+            "POST", self.path, body, **self._context()
+        )
         self._respond(status, response)
 
     def do_PUT(self) -> None:  # noqa: N802 (M20: edit/metadata routes)
@@ -79,11 +92,15 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
             body = self._read_body()
         except _BadBody:
             return
-        status, response = self._router().handle("PUT", self.path, body)
+        status, response = self._router().handle(
+            "PUT", self.path, body, **self._context()
+        )
         self._respond(status, response)
 
     def do_DELETE(self) -> None:  # noqa: N802 (M20: planning stores only)
-        status, response = self._router().handle("DELETE", self.path)
+        status, response = self._router().handle(
+            "DELETE", self.path, **self._context()
+        )
         self._respond(status, response)
 
     def log_message(self, format: str, *args) -> None:
@@ -128,13 +145,23 @@ class ApiServer:
             else str(Path(self._config.data_dir).parent / "backups")
         )
         self._backups = BackupManager(self._config.data_dir, backup_dir)
+        # Intelligence layer: env > persisted ai-settings.json > ApiConfig.
+        stored = ai_settings.load(self._config.data_dir)
+        provider_default = (
+            stored.get("provider") or self._config.ai_provider
+        )
+        model_default = stored.get("model") or self._config.ai_model
+        resolved = assistant_support.resolve_provider(provider_default)
         (
             self._assistant_provider,
             self._assistant,
             self._assistant_reason,
         ) = assistant_support.compose_assistant(
-            self._config.ai_provider, self._config.ai_model
+            provider_default,
+            model_default,
+            api_key=ai_settings.api_key_for(self._config.data_dir, resolved),
         )
+        self._mobile = PairingService(self._config.data_dir)
         self._http: HTTPServer | None = None
         self._serving = False
 
@@ -176,6 +203,8 @@ class ApiServer:
             assistant=self._assistant,
             assistant_provider=self._assistant_provider,
             assistant_reason=self._assistant_reason,
+            mobile=self._mobile,
+            ai_dir=Path(self._config.data_dir),
         )
         self._http = http
         import logging

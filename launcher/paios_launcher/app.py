@@ -57,6 +57,24 @@ def install_dir() -> Path:
     return Path.cwd()
 
 
+def user_data_root() -> Path:
+    """%LOCALAPPDATA%\\PAIOS — the standalone product's data home.
+
+    The application directory (Program Files) is read-only for the
+    product; database, settings, logs and backups all live here."""
+    base = os.environ.get("LOCALAPPDATA")
+    return (Path(base) if base else Path.home() / ".paios") / "PAIOS"
+
+
+def frozen_standalone() -> bool:
+    """True when this is the self-contained PAIOS.exe: frozen, with no
+    product venv beside it and no PAIOS_PYTHON override. Children are
+    then re-invocations of this very executable (``--child``)."""
+    if not is_frozen() or os.environ.get("PAIOS_PYTHON"):
+        return False
+    return not (install_dir() / "venv" / "Scripts" / "python.exe").is_file()
+
+
 def child_python() -> str:
     """The interpreter the children run with: PAIOS_PYTHON (installer)
     > the install's venv > this interpreter (development)."""
@@ -76,12 +94,25 @@ def child_python() -> str:
 
 
 def resolve_config(explicit_path: str | None) -> SystemConfig:
-    """flag > $PAIOS_CONFIG > <install>/config/config.yaml > defaults;
-    without a config file, logs nest in the data dir (the M16 rule)."""
+    """flag > $PAIOS_CONFIG > <install>/config/config.yaml >
+    <user data root>/config/config.yaml (standalone installs; generated
+    on first run) > defaults; without a config file, logs nest in the
+    data dir (the M16 rule)."""
     if explicit_path is None and not os.environ.get("PAIOS_CONFIG"):
         candidate = install_dir() / "config" / "config.yaml"
         if candidate.is_file():
             explicit_path = str(candidate)
+        elif is_frozen():
+            # Standalone product: the install dir (Program Files) is
+            # read-only, so configuration and data live under
+            # %LOCALAPPDATA%\PAIOS — created on first launch, which is
+            # how a fresh install initializes its database location.
+            user_config = user_data_root() / "config" / "config.yaml"
+            if not user_config.is_file():
+                from paios.system.config import generate_default_config
+
+                generate_default_config(user_config)
+            explicit_path = str(user_config)
     system = load_system_config(explicit_path)
     if system.source is None:
         system = replace(
@@ -110,7 +141,13 @@ def build_specs(
     python: str,
     *,
     with_gui: bool = True,
+    frozen_self: Path | None = None,
 ) -> list[ChildSpec]:
+    """Child commands. Development/venv installs run the M16 public
+    module surfaces with ``python``; the standalone product passes
+    ``frozen_self`` (PAIOS.exe itself), whose ``--child`` mode runs the
+    exact same entry points in-process — same arguments, no Python
+    installation required."""
     log_dir = Path(system.log_dir)
     config_args = (
         ("--config", system.source) if system.source is not None else ()
@@ -121,18 +158,22 @@ def build_specs(
         daemon_stop.parent.mkdir(parents=True, exist_ok=True)
         daemon_stop.write_text("stop", encoding="utf-8")
 
+    def child(module: str, *args: str) -> tuple:
+        if frozen_self is not None:
+            return (str(frozen_self), "--child", module, *args)
+        return (python, "-m", module, *args)
+
     url = f"http://{system.server_host}:{system.server_port}"
     specs = [
         ChildSpec(
             name="daemon",
-            command=(python, "-m", "paios.cli", *config_args,
-                     "daemon", "run"),
+            command=child("paios.cli", *config_args, "daemon", "run"),
             pre_stop=request_daemon_stop,
             output_path=log_dir / "paios-daemon.out",
         ),
         ChildSpec(
             name="api",
-            command=(python, "-m", "paios.cli", *config_args, "serve"),
+            command=child("paios.cli", *config_args, "serve"),
             output_path=log_dir / "paios-api.out",
         ),
     ]
@@ -140,8 +181,8 @@ def build_specs(
         specs.append(
             ChildSpec(
                 name="gui",
-                command=(
-                    python, "-m", "paios_gui",
+                command=child(
+                    "paios_gui",
                     "--url", url,
                     "--refresh", str(system.gui_refresh_seconds),
                     "--log-dir", system.log_dir,
@@ -150,6 +191,23 @@ def build_specs(
             )
         )
     return specs
+
+
+#: ``--child`` targets: module name -> in-process main(argv).
+def run_child(module: str, argv: list[str]) -> int:
+    """PAIOS.exe --child <module> <args...>: run a supervised child's
+    entry point inside this (frozen) executable. The commands mirror
+    ``python -m <module> <args...>`` exactly."""
+    if module == "paios.cli":
+        from paios.cli.main import main as cli_main
+
+        return cli_main(argv)
+    if module == "paios_gui":
+        from paios_gui.app import main as gui_main
+
+        return gui_main(argv)
+    print(f"Unknown child module: {module}", file=sys.stderr)
+    return 2
 
 
 def build_supervisor(
@@ -375,9 +433,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = build_arg_parser().parse_args(
-        sys.argv[1:] if argv is None else argv
-    )
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    # Child mode first, before any parsing or logging: PAIOS.exe
+    # re-invoked as one of its own supervised children (standalone
+    # installs have no separate Python to run them with).
+    if raw_argv[:1] == ["--child"]:
+        if len(raw_argv) < 2:
+            print("--child requires a module name", file=sys.stderr)
+            return 2
+        return run_child(raw_argv[1], raw_argv[2:])
+    arguments = build_arg_parser().parse_args(raw_argv)
     if arguments.version:
         from paios_launcher.update_check import installed_version
 
@@ -413,15 +478,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{error}", file=sys.stderr)
         return 2
 
-    try:
-        python = child_python()
-    except FileNotFoundError as error:
-        guard.release()
-        logger.error("%s", error)
-        print(f"Error: {error}", file=sys.stderr)
-        return 1
-
-    specs = build_specs(system, python, with_gui=not arguments.no_gui)
+    if frozen_standalone():
+        # Self-contained product: children are this executable.
+        python = sys.executable
+        specs = build_specs(
+            system,
+            python,
+            with_gui=not arguments.no_gui,
+            frozen_self=Path(sys.executable),
+        )
+    else:
+        try:
+            python = child_python()
+        except FileNotFoundError as error:
+            guard.release()
+            logger.error("%s", error)
+            print(f"Error: {error}", file=sys.stderr)
+            return 1
+        specs = build_specs(system, python, with_gui=not arguments.no_gui)
     supervisor = build_supervisor(system, specs)
     logger.info(
         "launcher starting (pid %s, python %s, config %s)",

@@ -4,6 +4,7 @@
 //
 // Afterwards a plain `flutter test` compares pixel-for-pixel.
 import 'dart:convert';
+import 'dart:ui' show Size;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:paios_mobile/main.dart';

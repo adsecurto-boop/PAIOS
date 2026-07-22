@@ -103,6 +103,7 @@ class TestWizardPersistence:
         assert stored["planning_style"] == "flexible"
         assert stored["work_hours_start"] == "09:00"
         assert stored["work_hours_end"] == "17:00"
+        assert stored["intelligence_mode"] == "local"  # the default
         assert stored["first_run_complete"] is True
 
         path = tmp_path / "gui-settings.json"

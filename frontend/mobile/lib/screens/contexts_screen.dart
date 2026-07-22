@@ -1,9 +1,8 @@
-// Contexts: read-only list.
+﻿// Contexts: read-only list.
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
-import '../services/app_state.dart';
 import 'rest_list_screen.dart';
 
 class ContextsScreen extends RestListScreen {
@@ -23,7 +22,7 @@ class ContextsScreen extends RestListScreen {
     final details = [item.location, item.environment, item.reason]
         .whereType<String>()
         .where((text) => text.isNotEmpty)
-        .join(' · ');
+        .join(' Â· ');
     return ListTile(
       title: Text(item.name),
       subtitle: details.isEmpty ? null : Text(details),

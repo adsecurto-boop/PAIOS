@@ -323,6 +323,39 @@ class AssistantOrchestrator:
             raw_response=raw,
         )
 
+    def morning_plan(
+        self, check_in: str, plan_lines, snapshot=None, goals=(), events=()
+    ) -> AssistantResult:
+        """Commentary on the Scheduler's existing plan for today, in
+        light of how the user woke up (sleep/mood/energy). Observation
+        only — the plan is input, never output."""
+        return self._run(
+            AssistantTask.MORNING_PLAN,
+            check_in=check_in.strip() or "(no check-in given)",
+            plan="\n".join(str(line) for line in plan_lines)
+            or "(no plan yet)",
+            context=context_builder.build_context(
+                snapshot=snapshot,
+                goals=tuple(goals),
+                events=tuple(events),
+            ),
+        )
+
+    def evening_review(
+        self, check_in: str, today_lines, snapshot=None, reflections=()
+    ) -> AssistantResult:
+        """A factual close of the day from recorded outcomes plus the
+        user's own notes."""
+        return self._run(
+            AssistantTask.EVENING_REVIEW,
+            check_in=check_in.strip() or "(no notes given)",
+            today="\n".join(str(line) for line in today_lines)
+            or "(nothing recorded today)",
+            context=context_builder.build_context(
+                snapshot=snapshot, reflections=tuple(reflections)
+            ),
+        )
+
     def explain_day_plan(self, plan_lines, facts) -> AssistantResult:
         """WHY for each entry of an existing Scheduler plan. Explanation
         only — the plan is input, never output."""

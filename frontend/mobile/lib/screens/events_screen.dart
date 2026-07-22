@@ -1,11 +1,10 @@
-// Events: create / edit / duplicate plus the lifecycle actions
+﻿// Events: create / edit / duplicate plus the lifecycle actions
 // (Start / Pause / Resume / Complete / Archive). Swipe left to archive.
 // Archive remains the only "delete" for events.
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
-import '../services/app_state.dart';
 import '../services/settings_service.dart';
 import '../widgets/event_form.dart';
 import 'rest_list_screen.dart';
@@ -100,8 +99,8 @@ class EventsScreen extends RestListScreen {
       },
       child: ListTile(
         title: Text(event.description),
-        subtitle: Text('${event.category} · ${event.status}'
-            '${event.durationMinutes == null ? '' : ' · ${event.durationMinutes} min'}'),
+        subtitle: Text('${event.category} Â· ${event.status}'
+            '${event.durationMinutes == null ? '' : ' Â· ${event.durationMinutes} min'}'),
         trailing: PopupMenuButton<String>(
           onSelected: (action) async {
             switch (action) {
@@ -130,8 +129,8 @@ class EventsScreen extends RestListScreen {
             PopupMenuItem(value: 'start', child: Text('Start')),
             PopupMenuItem(value: 'pause', child: Text('Pause')),
             PopupMenuItem(value: 'resume', child: Text('Resume')),
-            PopupMenuItem(value: 'complete', child: Text('Complete…')),
-            PopupMenuItem(value: 'edit', child: Text('Edit…')),
+            PopupMenuItem(value: 'complete', child: Text('Completeâ€¦')),
+            PopupMenuItem(value: 'edit', child: Text('Editâ€¦')),
             PopupMenuItem(value: 'duplicate', child: Text('Duplicate')),
             PopupMenuItem(value: 'archive', child: Text('Archive')),
           ],

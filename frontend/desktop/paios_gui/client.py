@@ -298,6 +298,51 @@ class ApiClient:
     def assistant_explain_day(self) -> dict:
         return self._request("POST", "/assistant/explain-day", {})
 
+    # --- intelligence layer (setup + settings) ------------------------------
+
+    def assistant_setup(self) -> dict:
+        """Hardware, model recommendations, Ollama state — one call."""
+        return self._request("GET", "/assistant/setup")
+
+    def assistant_ollama(self) -> dict:
+        return self._request("GET", "/assistant/ollama")
+
+    def assistant_ollama_pull(self, model: str) -> dict:
+        return self._request(
+            "POST", "/assistant/ollama/pull", {"model": model}
+        )
+
+    def assistant_config(self) -> dict:
+        return self._request("GET", "/assistant/config")
+
+    def set_assistant_config(
+        self,
+        provider: str,
+        model: str | None = None,
+        api_key: str | None = None,
+    ) -> dict:
+        body: dict = {"provider": provider}
+        if model:
+            body["model"] = model
+        if api_key:
+            body["api_key"] = api_key
+        return self._request("PUT", "/assistant/config", body)
+
+    def assistant_test(self) -> dict:
+        return self._request("POST", "/assistant/test", {})
+
+    def mobile_pairing_start(self) -> dict:
+        """Desktop-side: a 6-digit code the phone enters to pair."""
+        return self._request("POST", "/mobile/pairing/start", {})
+
+    def mobile_devices(self) -> list[dict]:
+        return self._request("GET", "/mobile/pairing/devices")["devices"]
+
+    def mobile_revoke_device(self, device_id: str) -> dict:
+        return self._request(
+            "DELETE", f"/mobile/pairing/devices/{device_id}"
+        )
+
     # --- backups (M20) ------------------------------------------------------
 
     def list_backups(self) -> list[dict]:

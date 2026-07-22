@@ -294,6 +294,84 @@ Map<String, dynamic> eventMetadataJson() => {
       'depends_on': <String>[],
     };
 
+// --- M21 mobile companion fixtures -----------------------------------------
+
+Map<String, dynamic> mobilePairJson() => {
+      'device_id': 'device_abc123',
+      'token': 'tok-secret-once',
+    };
+
+Map<String, dynamic> mobileTimelineJson() => {
+      'server_time': '2026-07-21T09:00:00',
+      'day': '2026-07-21',
+      'entries': [
+        {
+          'event_id': 'e1',
+          'title': 'Deep work',
+          'planned_start': '2026-07-21T10:00:00',
+          'duration_minutes': 60,
+          'reason': 'Highest priority; energy is fresh',
+        },
+      ],
+    };
+
+List<Map<String, dynamic>> mobileLogsJson() => [
+      {
+        'id': 'log1',
+        'kind': 'journal',
+        'text': 'Slept well, good focus',
+        'created_at': '2026-07-21T08:00:00',
+        'day': '2026-07-21',
+        'client_id': null,
+      },
+      {
+        'id': 'log2',
+        'kind': 'mood',
+        'text': 'Calm',
+        'created_at': '2026-07-21T08:05:00',
+        'day': '2026-07-21',
+        'client_id': 'mob-1-abc',
+      },
+    ];
+
+Map<String, dynamic> mobileStudyJson() => {
+      'knowledge': [
+        {
+          'knowledge_id': 'k1',
+          'user_id': 'u1',
+          'domain': 'Languages',
+          'topic': 'Sanskrit',
+          'concept': 'Sandhi rules',
+          'project_id': null,
+          'difficulty': 'medium',
+          'confidence': 0.6,
+          'revision_count': 3,
+          'last_revision': '2026-07-20T18:00:00',
+          'source': 'book',
+          'applied': false,
+          'retention_score': 0.7,
+        },
+      ],
+      'study_logs': [
+        {
+          'id': 'log3',
+          'kind': 'study',
+          'text': 'Revised sandhi rules for 30 minutes',
+          'created_at': '2026-07-20T18:00:00',
+          'day': '2026-07-20',
+          'client_id': null,
+        },
+      ],
+    };
+
+Map<String, dynamic> assistantQueryJson() => {
+      'source': 'llm',
+      'adapter': 'ollama',
+      'answer': 'Focus on the report first.',
+      'bullets': ['Deep work at 10:00', 'Energy is low — schedule a break'],
+      'confidence': 0.7,
+    };
+
 Map<String, dynamic> createEventResponseJson({String eventId = 'e9'}) => {
       'recommendation': {
         'recommendation_id': 'r9',

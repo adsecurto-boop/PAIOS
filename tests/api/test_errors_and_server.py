@@ -184,6 +184,10 @@ class TestDelegation:
             "_assistant",
             "_assistant_provider",
             "_assistant_reason",
+            "_mobile",
+            "_ai_dir",
+            "_request_headers",
+            "_request_client",
         }
 
     def test_actions_delegate_to_facade_methods(self, api_app):
@@ -238,6 +242,9 @@ ALLOWED_PAIOS_PREFIXES = (
     "paios.planning",
     "paios.assistant",
     "paios.system.backup",
+    # Intelligence layer (additive): hardware detection feeds the AI
+    # setup surface (model recommendations) — read-only probes only.
+    "paios.system.hardware",
 )
 
 

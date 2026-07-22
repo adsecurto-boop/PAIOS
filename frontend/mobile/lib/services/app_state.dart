@@ -14,6 +14,7 @@ import 'package:flutter/foundation.dart';
 import '../models/models.dart';
 import 'api_client.dart';
 import 'notification_center.dart';
+import 'offline_queue.dart';
 import 'settings_service.dart';
 
 class AppState extends ChangeNotifier {
@@ -31,10 +32,15 @@ class AppState extends ChangeNotifier {
   final DashboardWatcher _watcher = DashboardWatcher();
   Timer? _timer;
 
+  /// M21: queued /mobile/logs captures, flushed on every successful poll.
+  final OfflineQueue queue;
+
   AppState(this._store, {ApiClient Function(String url)? clientFactory})
       : settings = _store.read(),
         client = (clientFactory ?? ApiClient.new)(_store.read().baseUrl),
+        queue = OfflineQueue(_store),
         _clientFactory = clientFactory ?? ApiClient.new {
+    client.authToken = settings.deviceToken;
     _restoreCaches();
   }
 
@@ -110,6 +116,7 @@ class AppState extends ChangeNotifier {
       }
       if (fresh.isNotEmpty) await _persistNotifications();
       _setOnline(true);
+      await flushOfflineQueue(); // the server answered; push captures
     } on ApiUnreachableException catch (error) {
       lastError = error.detail;
       _setOnline(false);
@@ -131,6 +138,30 @@ class AppState extends ChangeNotifier {
       ));
     }
     online = value;
+    notifyListeners();
+  }
+
+  // --- offline capture queue (M21) ----------------------------------------
+
+  /// Pushes queued /mobile/logs captures to the desktop. Safe to call
+  /// any time: a missing token or unreachable server just leaves the
+  /// queue for the next poll (server-side client_id idempotency makes
+  /// repeat flushes harmless).
+  Future<void> flushOfflineQueue() async {
+    if (settings.deviceToken == null) return;
+    int flushed;
+    try {
+      flushed = await queue.flush(client);
+    } catch (_) {
+      return; // a failed flush is never worth a crash
+    }
+    if (flushed == 0) return;
+    center.add(MobileNotification(
+      message: 'Synced $flushed offline capture${flushed == 1 ? '' : 's'}.',
+      category: 'App',
+      kind: 'ok',
+    ));
+    await _persistNotifications();
     notifyListeners();
   }
 
@@ -174,17 +205,19 @@ class AppState extends ChangeNotifier {
   // --- settings -----------------------------------------------------------
 
   Future<void> updateSettings(Settings updated) async {
-    final urlChanged = updated.baseUrl != settings.baseUrl;
     final intervalChanged = updated.refreshSeconds != settings.refreshSeconds;
     settings = updated;
     await _store.write(updated);
-    if (urlChanged) {
-      client.close();
-      client = _clientFactory(updated.baseUrl);
-    }
+    // Always rebuild the client: saving settings is the user's "try
+    // again with these" gesture, even when the URL text is unchanged.
+    client.close();
+    client = _clientFactory(updated.baseUrl);
+    client.authToken = updated.deviceToken; // M21: pairing state follows
     if (intervalChanged && _timer != null) startPolling();
     notifyListeners();
-    if (urlChanged) await refresh();
+    // Saving settings always re-checks the connection — that is the
+    // "Save server" button's contract (and how reconnect is noticed).
+    await refresh();
   }
 
   @override

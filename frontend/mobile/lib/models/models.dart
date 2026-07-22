@@ -156,6 +156,89 @@ class DayReason {
           : const [];
 }
 
+/// One `/mobile/logs` entry: a journal / mood / energy / sleep / note
+/// / study capture (M21).
+class LogEntry {
+  final String id;
+  final String kind;
+  final String text;
+  final String? createdAt;
+  final String? day;
+  final String? clientId;
+  final bool pending; // true for queued captures the server has not seen
+
+  LogEntry.fromJson(Map<String, dynamic> json)
+      : id = _s(json['id']),
+        kind = _s(json['kind'], 'journal'),
+        text = _s(json['text']),
+        createdAt = _sOrNull(json['created_at']),
+        day = _sOrNull(json['day']),
+        clientId = _sOrNull(json['client_id']),
+        pending = false;
+
+  /// A queued OfflineQueue payload, rendered before the server has it.
+  LogEntry.fromQueued(Map<String, dynamic> json)
+      : id = _s(json['client_id']),
+        kind = _s(json['kind'], 'journal'),
+        text = _s(json['text']),
+        createdAt = _sOrNull(json['at']),
+        day = null,
+        clientId = _sOrNull(json['client_id']),
+        pending = true;
+
+  static List<LogEntry> listFrom(dynamic payload) =>
+      payload is Map<String, dynamic>
+          ? _listOfMaps(payload['entries']).map(LogEntry.fromJson).toList()
+          : payload is List
+              ? payload
+                  .whereType<Map<String, dynamic>>()
+                  .map(LogEntry.fromJson)
+                  .toList()
+              : const [];
+}
+
+/// One `/mobile/study` knowledge row (M12 serialization contract).
+class KnowledgeItem {
+  final String id;
+  final String domain;
+  final String topic;
+  final String concept;
+  final String? difficulty;
+  final double? confidence;
+  final int revisionCount;
+  final String? lastRevision;
+  final double? retentionScore;
+
+  KnowledgeItem.fromJson(Map<String, dynamic> json)
+      : id = _s(json['knowledge_id']),
+        domain = _s(json['domain']),
+        topic = _s(json['topic']),
+        concept = _s(json['concept']),
+        difficulty =
+            json['difficulty'] == null ? null : '${json['difficulty']}',
+        confidence = _dOrNull(json['confidence']),
+        revisionCount = _i(json['revision_count']),
+        lastRevision = _sOrNull(json['last_revision']),
+        retentionScore = _dOrNull(json['retention_score']);
+}
+
+/// One POST /mobile/assistant/query answer. source=="heuristic" means
+/// the desktop planned deterministically without an AI provider.
+class AssistantAnswer {
+  final String source; // llm | heuristic
+  final String answer;
+  final List<String> bullets;
+  final double? confidence;
+
+  AssistantAnswer.fromJson(Map<String, dynamic> json)
+      : source = _s(json['source'], 'heuristic'),
+        answer = _s(json['answer']),
+        bullets = _listOfStrings(json['bullets']),
+        confidence = _dOrNull(json['confidence']);
+
+  bool get heuristic => source == 'heuristic';
+}
+
 class Recommendation {
   final String id;
   final String status;

@@ -32,13 +32,25 @@ def check_interval_hours() -> float:
 
 
 def installed_version() -> str | None:
-    """The running product's version, from package metadata."""
+    """The running product's version: package metadata (venv/dev
+    installs), else version.txt beside the executable (standalone
+    PAIOS.exe — PyInstaller bundles no dist metadata)."""
     try:
         from importlib.metadata import version
 
         return version("paios")
-    except Exception:  # pragma: no cover - metadata always present installed
-        return None
+    except Exception:
+        pass
+    if getattr(sys, "frozen", False):
+        version_file = (
+            Path(sys.executable).resolve().parent / "version.txt"
+        )
+        try:
+            text = version_file.read_text(encoding="utf-8-sig").strip()
+            return text or None
+        except OSError:
+            return None
+    return None
 
 
 @dataclass(frozen=True)

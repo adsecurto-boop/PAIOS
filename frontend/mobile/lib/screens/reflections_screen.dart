@@ -1,9 +1,8 @@
-// Reflections: read-only list, newest first.
+﻿// Reflections: read-only list, newest first.
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
-import '../services/app_state.dart';
 import 'rest_list_screen.dart';
 
 class ReflectionsScreen extends RestListScreen {
@@ -25,7 +24,7 @@ class ReflectionsScreen extends RestListScreen {
           reflection.facts ??
           '(no text)'),
       subtitle: Text('${dayTime(reflection.createdAt)}'
-          '${reflection.improvement == null ? '' : ' · improve: ${reflection.improvement}'}'),
+          '${reflection.improvement == null ? '' : ' Â· improve: ${reflection.improvement}'}'),
       leading: const Icon(Icons.psychology_outlined),
     );
   }

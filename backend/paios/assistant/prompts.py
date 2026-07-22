@@ -156,6 +156,37 @@ PLANNING_CLASSIFICATION = PromptTemplate(
     ),
 )
 
+MORNING_PLANNING = PromptTemplate(
+    name="morning_planning",
+    system=_SHARED_RULES + (
+        " You are helping the user start their day. The Scheduler's "
+        "plan is already decided — never reorder or reschedule it. "
+        "Comment on it: which entries deserve protection, where the "
+        "risks are (energy mismatches, deadline crowding, overload "
+        "against how the user woke up), and one realistic suggestion. "
+        "Observations only."
+    ),
+    user_template=(
+        "How the user is starting the day (their own words/numbers):\n"
+        "{check_in}\n\nToday's plan (in scheduled order):\n{plan}\n\n"
+        "Context:\n{context}"
+    ),
+)
+
+EVENING_REVIEW = PromptTemplate(
+    name="evening_review",
+    system=_SHARED_RULES + (
+        " You are helping the user close their day. Summarize what "
+        "the day's records show, surface improvements as observations "
+        "(never instructions), and preview tomorrow strictly from the "
+        "supplied context."
+    ),
+    user_template=(
+        "The user's evening notes:\n{check_in}\n\n"
+        "What today's records show:\n{today}\n\nContext:\n{context}"
+    ),
+)
+
 DAY_PLAN_EXPLANATION = PromptTemplate(
     name="day_plan_explanation",
     system=_SHARED_RULES + (
@@ -184,5 +215,7 @@ TEMPLATES: dict[str, PromptTemplate] = {
         LEARNING_EXPLANATION,
         PLANNING_CLASSIFICATION,
         DAY_PLAN_EXPLANATION,
+        MORNING_PLANNING,
+        EVENING_REVIEW,
     )
 }

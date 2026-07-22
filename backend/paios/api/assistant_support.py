@@ -18,13 +18,15 @@ from paios.assistant.orchestrator import AssistantOrchestrator
 from paios.assistant.response_parser import ResponseParseError
 from paios.planning.classifier import classify_lines
 
-#: Providers the transport can compose.
-PROVIDERS = ("none", "null", "anthropic", "openai")
+#: Providers the transport can compose. "ollama" is the free, private,
+#: local default of the intelligence layer; cloud providers are opt-in.
+PROVIDERS = ("none", "null", "ollama", "anthropic", "openai")
 
 #: How to turn a real provider on (shown in logs and /assistant/status).
 CONFIG_HINT = (
-    "set PAIOS_AI_PROVIDER=openai or PAIOS_AI_PROVIDER=anthropic (or"
-    " --ai-provider), plus the provider's API key environment variable"
+    "choose an intelligence mode in Settings (local Ollama, OpenAI or"
+    " Anthropic), or set PAIOS_AI_PROVIDER=ollama|openai|anthropic —"
+    " cloud providers also need their API key"
 )
 
 
@@ -35,21 +37,30 @@ def resolve_provider(config_provider: str) -> str:
 
 
 def _construct(
-    provider: str, model: str | None
+    provider: str, model: str | None, api_key: str | None = None
 ) -> AssistantOrchestrator | None:
     """The one construction path; raises AdapterError when the chosen
-    provider's SDK or key is absent, returns None for "none"."""
+    provider's SDK, key or server is absent, returns None for "none"."""
     if provider == "null":
         return AssistantOrchestrator(NullAdapter())
+    if provider == "ollama":
+        from paios.assistant.adapters.ollama import OllamaAdapter
+
+        kwargs = {"model": model} if model else {}
+        return AssistantOrchestrator(OllamaAdapter(**kwargs))
     if provider == "anthropic":
         from paios.assistant.adapters.anthropic import AnthropicAdapter
 
         kwargs = {"model": model} if model else {}
+        if api_key:
+            kwargs["api_key"] = api_key
         return AssistantOrchestrator(AnthropicAdapter(**kwargs))
     if provider == "openai":
         from paios.assistant.adapters.openai import OpenAIAdapter
 
         kwargs = {"model": model} if model else {}
+        if api_key:
+            kwargs["api_key"] = api_key
         return AssistantOrchestrator(OpenAIAdapter(**kwargs))
     return None
 
@@ -67,7 +78,9 @@ def build_orchestrator(
 
 
 def compose_assistant(
-    config_provider: str, config_model: str | None = None
+    config_provider: str,
+    config_model: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[str, AssistantOrchestrator | None, str]:
     """(provider, orchestrator-or-None, human-readable reason).
 
@@ -82,7 +95,7 @@ def compose_assistant(
             f"no AI provider configured: {CONFIG_HINT}",
         )
     try:
-        orchestrator = _construct(provider, model)
+        orchestrator = _construct(provider, model, api_key)
     except AdapterError as error:
         return provider, None, str(error)
     return provider, orchestrator, f"{provider} adapter ready"
@@ -158,6 +171,163 @@ def proposal_payload(proposal) -> dict:
         ],
         "questions": list(proposal.questions),
         "confidence": proposal.confidence,
+    }
+
+
+# --- daily-rhythm workflows: deterministic fallbacks -------------------------
+# The same wire shape as the LLM path ({source, answer, bullets, ...}),
+# built purely from recorded facts. PAIOS's daily rhythm never depends
+# on a model being present.
+
+
+def _event_status(event) -> str:
+    status = getattr(event, "status", "")
+    return str(getattr(status, "value", status))
+
+
+def _completed_on(events, day: str) -> list:
+    completed = []
+    for event in events:
+        if _event_status(event) != "Completed":
+            continue
+        end = getattr(event, "end_time", None)
+        if end is not None and end.isoformat()[:10] == day:
+            completed.append(event)
+    return completed
+
+
+def heuristic_morning_payload(
+    app, planning, check_in: dict, today: str
+) -> dict:
+    """Morning briefing without a model: the Scheduler's plan entries,
+    top priorities, and mechanically detected risks."""
+    entries = deterministic_day_reasons(app, planning)
+    # Priority-tagged entries first (the Scheduler already ordered the
+    # rest); the top three become the day's named priorities.
+    priorities = [
+        entry["title"]
+        for entry in entries
+        if "priority" in entry["reason"]
+    ][:3] or [entry["title"] for entry in entries[:3]]
+    risks = []
+    energy = str(check_in.get("energy") or "").lower()
+    if len(entries) > 8:
+        risks.append(
+            f"{len(entries)} planned entries — the day may be overloaded"
+        )
+    if energy == "low":
+        high_energy = [
+            entry["title"]
+            for entry in entries
+            if "high energy" in entry["reason"]
+        ]
+        if high_energy:
+            risks.append(
+                "low energy reported, but high-energy work is planned: "
+                + ", ".join(high_energy)
+            )
+    deadlines = [
+        entry["title"] for entry in entries if "deadline" in entry["reason"]
+    ]
+    if deadlines:
+        risks.append("deadline-bound today: " + ", ".join(deadlines))
+    sleep = check_in.get("sleep_hours")
+    if isinstance(sleep, (int, float)) and sleep and sleep < 6:
+        risks.append(
+            f"only {sleep:g}h sleep reported — consider protecting breaks"
+        )
+    answer = (
+        f"Plan for {today}: {len(entries)} scheduled entr"
+        f"{'y' if len(entries) == 1 else 'ies'}."
+        + (f" Priorities: {', '.join(priorities)}." if priorities else "")
+        + (" No mechanical risks detected." if not risks else "")
+    )
+    return {
+        "source": "heuristic",
+        "answer": answer,
+        "timeline": entries,
+        "priorities": priorities,
+        "risks": risks,
+        "confidence": None,
+    }
+
+
+def heuristic_evening_payload(app, check_in: dict, today: str) -> dict:
+    """Evening review without a model: completed vs open, plus the
+    user's own notes echoed into a factual summary."""
+    events = list(app.list_events())
+    completed = _completed_on(events, today)
+    open_events = [
+        event
+        for event in events
+        if _event_status(event)
+        in ("Scheduled", "Ready", "Started", "Resumed", "Paused")
+    ]
+    improvements = []
+    if open_events and completed:
+        improvements.append(
+            f"{len(open_events)} item(s) remain open — consider whether"
+            " they belong on tomorrow's plan or should be archived"
+        )
+    if not completed:
+        improvements.append(
+            "no completions were recorded today — if work happened,"
+            " recording outcomes keeps the learning data honest"
+        )
+    plan = app.plan()
+    tomorrow = []
+    if plan is not None:
+        events_by_id = {str(e.event_id): e for e in events}
+        for entry in plan.entries:
+            if entry.planned_start.isoformat()[:10] > today:
+                event = events_by_id.get(str(entry.event_id))
+                if event is not None:
+                    tomorrow.append(event.description)
+    return {
+        "source": "heuristic",
+        "answer": (
+            f"Today {today}: {len(completed)} completed, "
+            f"{len(open_events)} still open."
+            + (
+                f" Notes: {check_in.get('notes')}"
+                if check_in.get("notes")
+                else ""
+            )
+        ),
+        "completed": [event.description for event in completed],
+        "improvements": improvements,
+        "tomorrow": tomorrow[:5],
+        "confidence": None,
+    }
+
+
+def heuristic_weekly_payload(app, week_days: list[str]) -> dict:
+    """Weekly review without a model: per-day completion counts and
+    open goal/project tallies — trends as plain arithmetic."""
+    events = list(app.list_events())
+    per_day = {
+        day: len(_completed_on(events, day)) for day in week_days
+    }
+    total = sum(per_day.values())
+    goals = list(app.list_goals())
+    projects = list(app.list_projects())
+    best_day = max(per_day, key=per_day.get) if per_day else None
+    bullets = [f"{day}: {count} completed" for day, count in per_day.items()]
+    return {
+        "source": "heuristic",
+        "answer": (
+            f"Week in numbers: {total} completion(s) across "
+            f"{len(week_days)} day(s)"
+            + (
+                f"; most productive day {best_day}."
+                if best_day and per_day[best_day]
+                else "."
+            )
+            + f" Open goals: {len(goals)}; projects: {len(projects)}."
+        ),
+        "per_day": per_day,
+        "bullets": bullets,
+        "confidence": None,
     }
 
 

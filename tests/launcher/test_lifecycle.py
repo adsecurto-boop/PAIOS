@@ -105,6 +105,74 @@ class TestChildSpecs:
         daemon.pre_stop()
         assert (tmp_path / "logs" / "paios-daemon.stop").is_file()
 
+    def test_frozen_self_children_reinvoke_the_launcher(self, tmp_path):
+        """Standalone product: no Python on the machine — children are
+        PAIOS.exe --child <module> <same args as python -m module>."""
+        config_path = str(tmp_path / "config.yaml")
+        exe = Path("C:/Program Files/PAIOS/PAIOS.exe")
+        specs = {
+            spec.name: spec
+            for spec in launcher_app.build_specs(
+                self.system(tmp_path, source=config_path),
+                "unused-python",
+                frozen_self=exe,
+            )
+        }
+        assert specs["daemon"].command == (
+            str(exe), "--child", "paios.cli", "--config", config_path,
+            "daemon", "run",
+        )
+        assert specs["api"].command == (
+            str(exe), "--child", "paios.cli", "--config", config_path,
+            "serve",
+        )
+        gui = specs["gui"].command
+        assert gui[:3] == (str(exe), "--child", "paios_gui")
+        assert "http://127.0.0.1:9911" in gui
+
+
+class TestChildDispatch:
+    def test_child_flag_dispatches_before_parsing(self, monkeypatch):
+        recorded = {}
+
+        def fake_cli_main(argv):
+            recorded["argv"] = argv
+            return 0
+
+        import importlib
+
+        cli_main_module = importlib.import_module("paios.cli.main")
+        monkeypatch.setattr(cli_main_module, "main", fake_cli_main)
+        code = launcher_app.main(
+            ["--child", "paios.cli", "--config", "x.yaml", "serve"]
+        )
+        assert code == 0
+        assert recorded["argv"] == ["--config", "x.yaml", "serve"]
+
+    def test_unknown_child_module_is_refused(self):
+        assert launcher_app.run_child("not.a.module", []) == 2
+
+    def test_child_without_module_name_is_refused(self):
+        assert launcher_app.main(["--child"]) == 2
+
+
+class TestStandaloneDetection:
+    def test_dev_run_is_never_standalone(self):
+        assert launcher_app.frozen_standalone() is False
+
+    def test_frozen_without_venv_is_standalone(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "frozen", "1", raising=False)
+        monkeypatch.setattr(
+            sys, "executable", str(tmp_path / "PAIOS.exe")
+        )
+        monkeypatch.delenv("PAIOS_PYTHON", raising=False)
+        assert launcher_app.frozen_standalone() is True
+        # A product venv beside the exe flips it back to legacy mode.
+        venv = tmp_path / "venv" / "Scripts"
+        venv.mkdir(parents=True)
+        (venv / "python.exe").write_bytes(b"")
+        assert launcher_app.frozen_standalone() is False
+
 
 class TestHeadlessLoop:
     def test_bounded_run_starts_polls_and_shuts_down(self, tmp_path):

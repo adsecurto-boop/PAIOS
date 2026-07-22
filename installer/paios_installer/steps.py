@@ -27,6 +27,19 @@ TASK_NAME = "PAIOS Daemon"
 SHORTCUT_NAME = "PAIOS.lnk"
 START_MENU_FOLDER = "PAIOS"
 MINIMUM_PYTHON = (3, 12)
+PUBLISHER = "PAIOS Project"
+#: Payload subdirectory carrying the self-contained application tree
+#: (PAIOS.exe + _internal + PAIOSUpdater.exe + version.txt). When it is
+#: present the installer copies files — no Python, venv or pip needed.
+APP_PAYLOAD_DIR = "app"
+
+
+def default_user_data_dir() -> Path:
+    """%LOCALAPPDATA%\\PAIOS — where the product keeps database,
+    settings, logs, memories and backups. Never inside Program Files,
+    never removed by an upgrade."""
+    base = os.environ.get("LOCALAPPDATA")
+    return (Path(base) if base else Path.home() / ".paios") / "PAIOS"
 
 
 class InstallerError(RuntimeError):
@@ -49,6 +62,8 @@ class InstallOptions:
     #: task (`paios daemon start`) — the "service" option.
     runtime_task: bool = False
     python: str = "python"
+    #: Standalone installs: where user data lives (None -> default).
+    user_data_dir: Path | None = None
 
 
 class InstallLog:
@@ -68,7 +83,12 @@ class InstallLog:
         stamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         self._handle.write(f"{stamp} | {message}\n")
         self._handle.flush()
-        self._echo(message)
+        try:
+            self._echo(message)
+        except UnicodeEncodeError:
+            # A cp1252 console must never kill the installer; the log
+            # file above already has the full message.
+            self._echo(message.encode("ascii", "replace").decode("ascii"))
 
     def close(self) -> None:
         self._handle.close()
@@ -153,21 +173,55 @@ class Installer:
     def config_file(self) -> Path:
         return self.options.install_dir / "config" / "config.yaml"
 
+    @property
+    def app_payload(self) -> Path | None:
+        """The self-contained application tree in the payload, if any."""
+        if self.options.payload_dir is None:
+            return None
+        candidate = self.options.payload_dir / APP_PAYLOAD_DIR
+        return candidate if candidate.is_dir() else None
+
+    @property
+    def standalone(self) -> bool:
+        """True when the payload carries the bundled application — the
+        consumer product path: copy files, no Python required."""
+        return self.app_payload is not None
+
+    @property
+    def user_data_dir(self) -> Path:
+        return (
+            self.options.user_data_dir
+            if self.options.user_data_dir is not None
+            else default_user_data_dir()
+        )
+
     # --- the run -----------------------------------------------------------
 
     def run(self) -> None:
-        steps = [
-            ("Checking Python", self.check_python),
-            ("Creating directories", self.create_layout),
-            ("Creating virtual environment", self.create_venv),
-            ("Installing PAIOS", self.install_package),
-            ("Placing PAIOS.exe", self.place_launcher),
-            ("Generating configuration", self.generate_config),
-            ("Creating shortcuts", self.create_shortcuts),
-            ("Registering startup", self.register_startup),
-            ("Registering runtime task", self.register_runtime_task),
-            ("Running health checks", self.health_check),
-        ]
+        if self.standalone:
+            steps = [
+                ("Checking previous installation", self.detect_previous),
+                ("Stopping running PAIOS", self.stop_running),
+                ("Installing application files", self.install_app_tree),
+                ("Preparing user data folders", self.create_user_data_layout),
+                ("Creating shortcuts", self.create_shortcuts),
+                ("Registering startup", self.register_startup),
+                ("Registering uninstaller", self.register_uninstall_entry),
+                ("Running health checks", self.standalone_health_check),
+            ]
+        else:
+            steps = [
+                ("Checking Python", self.check_python),
+                ("Creating directories", self.create_layout),
+                ("Creating virtual environment", self.create_venv),
+                ("Installing PAIOS", self.install_package),
+                ("Placing PAIOS.exe", self.place_launcher),
+                ("Generating configuration", self.generate_config),
+                ("Creating shortcuts", self.create_shortcuts),
+                ("Registering startup", self.register_startup),
+                ("Registering runtime task", self.register_runtime_task),
+                ("Running health checks", self.health_check),
+            ]
         self.log.write(f"PAIOS installer -> {self.options.install_dir}")
         for title, step in steps:
             self.log.write(f"* {title}...")
@@ -180,6 +234,104 @@ class Installer:
                 self.log.write(f"FAILED: {title}: {error}")
                 raise InstallerError(f"{title} failed: {error}") from error
         self.log.write("PAIOS installed successfully.")
+
+    # --- standalone steps (the consumer product path) ----------------------
+
+    def installed_version(self) -> str | None:
+        version_file = self.options.install_dir / "version.txt"
+        try:
+            # utf-8-sig: tolerate a BOM (PowerShell writes one).
+            text = version_file.read_text(encoding="utf-8-sig").strip()
+            return text or None
+        except OSError:
+            return None
+
+    def payload_version(self) -> str | None:
+        payload = self.app_payload
+        if payload is None:
+            return None
+        try:
+            text = (payload / "version.txt").read_text(
+                encoding="utf-8-sig"
+            ).strip()
+            return text or None
+        except OSError:
+            return None
+
+    def detect_previous(self) -> None:
+        previous = self.installed_version()
+        target = self.payload_version() or "unknown"
+        if previous is None:
+            self.log.write(f"  fresh installation (PAIOS {target})")
+        else:
+            self.log.write(
+                f"  upgrading PAIOS {previous} -> {target}"
+                " (user data is untouched)"
+            )
+
+    def stop_running(self) -> None:
+        """Ask a running PAIOS to exit so its files can be replaced."""
+        if not self.launcher_exe.is_file():
+            self.log.write("  nothing running to stop")
+            return
+        try:
+            self.runner([str(self.launcher_exe), "--stop"], timeout=60)
+            self.log.write("  stop requested")
+        except Exception as error:  # best effort; install proceeds
+            self.log.write(f"  stop request failed (ignored): {error}")
+
+    def install_app_tree(self) -> None:
+        payload = self.app_payload
+        assert payload is not None
+        self.options.install_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copytree(
+                payload, self.options.install_dir, dirs_exist_ok=True
+            )
+        except OSError as error:
+            raise InstallerError(
+                f"copying application files failed: {error}. Close any"
+                " running PAIOS and retry."
+            ) from error
+        self.log.write(
+            f"  application installed to {self.options.install_dir}"
+        )
+
+    def create_user_data_layout(self) -> None:
+        for name in ("config", "data", "logs", "backups"):
+            (self.user_data_dir / name).mkdir(parents=True, exist_ok=True)
+        self.log.write(f"  user data home: {self.user_data_dir}")
+
+    def register_uninstall_entry(self) -> None:
+        """The Add/Remove Programs entry: name, version, publisher,
+        icon, uninstall command."""
+        uninstaller = self.options.install_dir / "PAIOSUninstall.exe"
+        uninstall_command = (
+            f'"{uninstaller}"'
+            if uninstaller.is_file()
+            else f'"{self.launcher_exe}" --stop'
+        )
+        version = self.installed_version() or "0.0.0"
+        self.registry.set_uninstall_entry(
+            {
+                "DisplayName": "PAIOS",
+                "DisplayVersion": version,
+                "Publisher": PUBLISHER,
+                "InstallLocation": str(self.options.install_dir),
+                "DisplayIcon": str(self.launcher_exe),
+                "UninstallString": uninstall_command,
+            }
+        )
+        self.log.write(f"  uninstall entry registered (v{version})")
+
+    def standalone_health_check(self) -> None:
+        result = self.runner([str(self.launcher_exe), "--version"])
+        reported = (getattr(result, "stdout", "") or "").strip()
+        if getattr(result, "returncode", 1) == 0 and reported:
+            self.log.write(f"  PAIOS.exe reports version {reported}")
+        else:
+            # Reported, not fatal — matches the legacy health behavior.
+            self.log.write("  (health check could not confirm the version)")
 
     # --- steps -------------------------------------------------------------
 
@@ -381,13 +533,18 @@ class Installer:
 
 
 class Uninstaller:
-    """Reverse of the installer; ``keep_data`` preserves data/backups."""
+    """Reverse of the installer; ``keep_data`` preserves data/backups
+    inside a legacy install dir. ``remove_user_data`` additionally
+    deletes the separate user data home (%LOCALAPPDATA%\\PAIOS) — only
+    ever True after the user explicitly declined to keep their data."""
 
     def __init__(
         self,
         install_dir: Path,
         *,
         keep_data: bool = False,
+        remove_user_data: bool = False,
+        user_data_dir: Path | None = None,
         runner=default_runner,
         registry=None,
         log: InstallLog | None = None,
@@ -397,6 +554,12 @@ class Uninstaller:
     ) -> None:
         self.install_dir = install_dir
         self.keep_data = keep_data
+        self.remove_user_data = remove_user_data
+        self.user_data_dir = (
+            user_data_dir
+            if user_data_dir is not None
+            else default_user_data_dir()
+        )
         self.runner = runner
         self.registry = registry if registry is not None else (
             WindowsRegistry() if os.name == "nt" else NullRegistry()
@@ -416,12 +579,31 @@ class Uninstaller:
         self.remove_startup()
         self.remove_runtime_task()
         self.remove_shortcuts()
+        self.remove_uninstall_entry()
         self.remove_install_dir()
+        self.remove_user_data_dir()
         self.log.write("PAIOS uninstalled.")
 
-    def stop_launcher(self) -> None:
-        # Best effort: ask a running headless launcher to stop via the
-        # sentinel; a tray launcher is closed by the user.
+    def stop_launcher(self, wait_seconds: int = 20, sleep=None) -> None:
+        """Ask a running PAIOS to exit and wait (bounded) until its
+        executable is replaceable. `PAIOS.exe --stop` resolves the real
+        log directory itself — standalone installs keep logs in the
+        user data home, so writing sentinels here would miss them."""
+        import time as _time
+
+        sleep = sleep if sleep is not None else _time.sleep
+        launcher = self.install_dir / "PAIOS.exe"
+        if launcher.is_file():
+            try:
+                self.runner([str(launcher), "--stop"], timeout=60)
+                self.log.write("  stop requested")
+            except Exception as error:
+                self.log.write(f"  stop request failed (ignored): {error}")
+            for _ in range(wait_seconds):
+                if not self._locked(launcher):
+                    break
+                sleep(1)
+        # Legacy layout: sentinels beside the install, best effort.
         for logs in (self.install_dir / "logs",):
             if logs.is_dir():
                 (logs / "paios-launcher.stop").write_text(
@@ -432,9 +614,22 @@ class Uninstaller:
                 )
         self.log.write("  stop sentinels written")
 
+    @staticmethod
+    def _locked(path: Path) -> bool:
+        """True while Windows still holds the executable open."""
+        try:
+            with open(path, "ab"):
+                return False
+        except OSError:
+            return True
+
     def remove_startup(self) -> None:
         self.registry.delete_run_value(RUN_VALUE_NAME)
         self.log.write("  startup registration removed")
+
+    def remove_uninstall_entry(self) -> None:
+        self.registry.delete_uninstall_entry()
+        self.log.write("  uninstall entry removed")
 
     def remove_runtime_task(self) -> None:
         self.runner(["schtasks", "/Delete", "/F", "/TN", TASK_NAME])
@@ -451,14 +646,43 @@ class Uninstaller:
         if not self.install_dir.is_dir():
             return
         if self.keep_data:
+            leftovers = []
             for entry in self.install_dir.iterdir():
                 if entry.name in ("data", "backups"):
                     continue
-                if entry.is_dir():
-                    shutil.rmtree(entry, ignore_errors=True)
-                else:
-                    entry.unlink(missing_ok=True)
+                try:
+                    if entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink(missing_ok=True)
+                except OSError:
+                    leftovers.append(entry.name)
+            if leftovers:
+                self.log.write(
+                    "  some files are still in use and were left behind: "
+                    + ", ".join(leftovers)
+                    + " — delete the folder after PAIOS fully exits"
+                )
             self.log.write("  install removed (data/backups kept)")
         else:
             shutil.rmtree(self.install_dir, ignore_errors=True)
+            if self.install_dir.exists():
+                self.log.write(
+                    "  some files are still in use; delete "
+                    f"{self.install_dir} after PAIOS fully exits"
+                )
             self.log.write("  install directory removed")
+
+    def remove_user_data_dir(self) -> None:
+        """The separate user data home — deleted ONLY on an explicit
+        "remove my data" choice, and never when it coincides with the
+        install dir (legacy layout; handled by remove_install_dir)."""
+        target = self.user_data_dir
+        if not self.remove_user_data:
+            if target.is_dir() and target != self.install_dir:
+                self.log.write(f"  user data kept: {target}")
+            return
+        if target == self.install_dir or not target.is_dir():
+            return
+        shutil.rmtree(target, ignore_errors=True)
+        self.log.write(f"  user data removed: {target}")

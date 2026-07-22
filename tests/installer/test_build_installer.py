@@ -20,16 +20,24 @@ class TestCommandConstruction:
         assert "--no-deps" in command
         assert str(build_installer.REPO_ROOT) in command
 
-    def test_launcher_is_onefile_windowed_named_paios(self, tmp_path):
+    def test_launcher_is_onedir_windowed_with_all_packages(self, tmp_path):
         command = build_installer.launcher_command(
             tmp_path / "dist", tmp_path / "work"
         )
-        assert "--onefile" in command
+        # ONEDIR (no --onefile): children re-invoke PAIOS.exe without
+        # re-extracting the bundle — the standalone product layout.
+        assert "--onefile" not in command
         assert "--windowed" in command
         assert command[command.index("--name") + 1] == "PAIOS"
         assert command[-1].endswith("__main__.py")
         assert "paios_launcher" in command[-1]
-        # All three package roots are importable during analysis.
+        # The whole product is collected: backend, GUI, launcher.
+        collected = [
+            command[i + 1]
+            for i, part in enumerate(command)
+            if part == "--collect-submodules"
+        ]
+        assert collected == ["paios", "paios_gui", "paios_launcher"]
         paths = [
             command[i + 1]
             for i, part in enumerate(command)
@@ -38,6 +46,17 @@ class TestCommandConstruction:
         assert any("backend" in p for p in paths)
         assert any("desktop" in p for p in paths)
         assert any("launcher" in p for p in paths)
+
+    def test_uninstaller_is_onefile_console_named_paiosuninstall(
+        self, tmp_path
+    ):
+        command = build_installer.uninstaller_command(
+            tmp_path / "dist", tmp_path / "work"
+        )
+        assert "--onefile" in command
+        assert "--console" in command
+        assert command[command.index("--name") + 1] == "PAIOSUninstall"
+        assert "paios_installer" in command[-1]
 
     def test_setup_is_console_named_paiossetup_with_payload(self, tmp_path):
         command = build_installer.setup_command(
@@ -53,20 +72,37 @@ class TestCommandConstruction:
 
 
 class TestPayloadStaging:
-    def test_stages_newest_wheel_and_launcher(self, tmp_path):
+    def make_app_dir(self, tmp_path):
+        app = tmp_path / "PAIOS"
+        (app / "_internal").mkdir(parents=True)
+        (app / "PAIOS.exe").write_bytes(b"exe")
+        (app / "_internal" / "base_library.zip").write_bytes(b"lib")
+        return app
+
+    def test_stages_wheel_and_application_tree(self, tmp_path):
         wheels = tmp_path / "wheels"
         wheels.mkdir()
         (wheels / "paios-1.6.0-py3-none-any.whl").write_bytes(b"old")
         (wheels / "paios-1.7.0-py3-none-any.whl").write_bytes(b"new")
-        launcher = tmp_path / "PAIOS.exe"
-        launcher.write_bytes(b"exe")
+        app = self.make_app_dir(tmp_path)
+        updater = tmp_path / "PAIOSUpdater.exe"
+        updater.write_bytes(b"upd")
         payload = tmp_path / "payload"
-        staged = build_installer.stage_payload(payload, wheels, launcher)
-        names = sorted(path.name for path in staged)
-        assert names == ["PAIOS.exe", "paios-1.7.0-py3-none-any.whl"]
+        build_installer.stage_payload(
+            payload, wheels, app,
+            extra_app_files=[updater], version="1.7.0",
+        )
         assert (payload / "paios-1.7.0-py3-none-any.whl").read_bytes() == (
             b"new"
         )
+        assert (payload / "app" / "PAIOS.exe").read_bytes() == b"exe"
+        assert (
+            payload / "app" / "_internal" / "base_library.zip"
+        ).is_file()
+        assert (payload / "app" / "PAIOSUpdater.exe").read_bytes() == b"upd"
+        assert (payload / "app" / "version.txt").read_text(
+            encoding="utf-8"
+        ).strip() == "1.7.0"
 
     def test_missing_wheel_is_an_error(self, tmp_path):
         empty = tmp_path / "wheels"
@@ -86,7 +122,7 @@ class TestPayloadStaging:
         build_installer.stage_payload(payload, wheels, None)
         assert not (payload / "stale-file").exists()
 
-    def test_launcher_is_optional(self, tmp_path):
+    def test_app_tree_is_optional(self, tmp_path):
         wheels = tmp_path / "wheels"
         wheels.mkdir()
         (wheels / "paios-1.7.0-py3-none-any.whl").write_bytes(b"w")
@@ -138,3 +174,28 @@ class TestReleaseArtifacts:
         assert build_installer.extract_release_notes("0.0.99") == (
             "PAIOS 0.0.99"
         )
+
+    def test_version_resource_carries_version_and_publisher(self):
+        text = build_installer.version_resource_text("2.2.0")
+        assert "(2, 2, 0, 0)" in text
+        assert "'FileVersion', '2.2.0'" in text
+        assert build_installer.PUBLISHER in text
+        assert "'ProductName', 'PAIOS'" in text
+
+    def test_iscc_command_defines_version_and_payload(self, tmp_path):
+        command = build_installer.iscc_command(
+            "ISCC.exe", "2.2.0", tmp_path / "payload" / "app",
+            tmp_path / "dist",
+        )
+        assert command[0] == "ISCC.exe"
+        assert "/DAppVersion=2.2.0" in command
+        assert any(
+            part.startswith("/DPayloadDir=") for part in command
+        )
+        assert command[-1].endswith("PAIOSSetup.iss")
+
+    def test_inno_script_exists_alongside_the_installer_package(self):
+        assert build_installer.INNO_SCRIPT.is_file()
+        content = build_installer.INNO_SCRIPT.read_text(encoding="utf-8")
+        assert "Keep your PAIOS data?" in content
+        assert "{autopf}\\PAIOS" in content

@@ -133,6 +133,73 @@ class InboxStore(_JsonFileStore):
         self._delete(item_id)
 
 
+class DailyLogStore(_JsonFileStore):
+    """Daily capture: journal entries, mood/energy/sleep check-ins and
+    study notes — from the desktop or the mobile companion.
+
+    Mobile sync discipline: an entry may carry a ``client_id`` the
+    capturing device generated. Re-submitting the same client_id is a
+    no-op returning the original record, so a phone can flush its
+    offline queue as many times as it needs without duplicates."""
+
+    KINDS = ("journal", "mood", "energy", "sleep", "note", "study")
+
+    def __init__(self, planning_dir: Path) -> None:
+        super().__init__(planning_dir / "logs.json", "entries")
+
+    def add(
+        self,
+        kind: str,
+        text: str,
+        at: datetime,
+        client_id: str | None = None,
+        extra: dict | None = None,
+    ) -> dict:
+        if kind not in self.KINDS:
+            raise PlanningStoreError(
+                f"'kind' must be one of {', '.join(self.KINDS)}"
+            )
+        if client_id:
+            existing = self.find_by_client_id(client_id)
+            if existing is not None:
+                return existing  # idempotent offline-queue flush
+        record = {
+            "id": _new_id("log"),
+            "kind": kind,
+            "text": _require_text(text, "text"),
+            "created_at": at.isoformat(),
+            "day": at.isoformat()[:10],
+            "client_id": client_id,
+        }
+        if extra:
+            record["extra"] = {
+                str(key): value for key, value in extra.items()
+            }
+        self._put(record["id"], record)
+        return record
+
+    def find_by_client_id(self, client_id: str) -> dict | None:
+        for record in self._records().values():
+            if record.get("client_id") == client_id:
+                return record
+        return None
+
+    def list(
+        self, day: str | None = None, kind: str | None = None
+    ) -> list[dict]:
+        records = sorted(
+            self._records().values(), key=lambda item: item["created_at"]
+        )
+        if day is not None:
+            records = [item for item in records if item["day"] == day]
+        if kind is not None:
+            records = [item for item in records if item["kind"] == kind]
+        return records
+
+    def delete(self, entry_id: str) -> None:
+        self._delete(entry_id)
+
+
 #: Energy levels the sidecar accepts (display/AI vocabulary, not Domain).
 ENERGY_LEVELS = ("low", "medium", "high")
 

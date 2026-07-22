@@ -9,8 +9,10 @@ class TestTemplates:
     def test_registry_has_the_mission_templates_plus_m20_planning(self):
         assert sorted(prompts.TEMPLATES) == [
             "day_plan_explanation",
+            "evening_review",
             "explain",
             "learning_explanation",
+            "morning_planning",
             "planning_classification",
             "project_explanation",
             "recommendation_explanation",

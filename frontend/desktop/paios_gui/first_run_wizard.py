@@ -122,57 +122,217 @@ class _PreferencesPage(QWizardPage):
         form.addRow(self.notifications)
 
 
-class _ProviderPage(QWizardPage):
+class _IntelligencePage(QWizardPage):
+    """Choose your PAIOS Intelligence Mode.
+
+    Three modes, all safe: Local AI (free, private, offline via
+    Ollama), Cloud AI (user's own key), Basic (the deterministic
+    engine that always works). Every action here is optional — the
+    wizard never blocks on AI, and skipping the page leaves PAIOS in
+    Basic mode."""
+
     def __init__(self, wizard: "FirstRunWizard") -> None:
         super().__init__()
         self._wizard = wizard
-        self.setTitle("AI assistant")
+        self._recommended_model: str | None = None
+        self.setTitle("Choose your PAIOS Intelligence Mode")
         self.setSubTitle(
-            "The provider is configured server-side; this is what the"
-            " backend reports."
+            "PAIOS always works — AI is an optional layer on top."
         )
-        form = QFormLayout(self)
-        self.provider_label = QLabel("(not queried yet)")
-        form.addRow("Provider", self.provider_label)
-        self.available_label = QLabel("—")
-        form.addRow("Available", self.available_label)
-        self.summary_label = QLabel("")
-        self.summary_label.setWordWrap(True)
-        self.summary_label.setObjectName("subtitle")
-        form.addRow(self.summary_label)
+        column = QVBoxLayout(self)
+
+        self.local_radio = QRadioButton("Local AI (Recommended)")
+        self.local_radio.setChecked(True)
+        column.addWidget(self.local_radio)
+        local_text = QLabel(
+            "Free. Private. Runs on your computer. Works offline"
+            " after setup."
+        )
+        local_text.setObjectName("subtitle")
+        local_text.setWordWrap(True)
+        column.addWidget(local_text)
+        self.hardware_label = QLabel("Detecting hardware…")
+        self.hardware_label.setWordWrap(True)
+        column.addWidget(self.hardware_label)
+        local_row = QHBoxLayout()
+        self.install_button = QPushButton("Install recommended model")
+        self.install_button.clicked.connect(self.install_model)
+        local_row.addWidget(self.install_button)
+        self.use_local_button = QPushButton("Use local AI")
+        self.use_local_button.clicked.connect(self.use_local)
+        local_row.addWidget(self.use_local_button)
+        local_row.addStretch(1)
+        column.addLayout(local_row)
+
+        self.cloud_radio = QRadioButton("Cloud AI")
+        column.addWidget(self.cloud_radio)
+        cloud_text = QLabel(
+            "OpenAI or Anthropic Claude with your own API key. The key"
+            " is stored encrypted for your Windows account only."
+        )
+        cloud_text.setObjectName("subtitle")
+        cloud_text.setWordWrap(True)
+        column.addWidget(cloud_text)
+        cloud_row = QHBoxLayout()
+        self.cloud_provider = QComboBox()
+        self.cloud_provider.addItems(["anthropic", "openai"])
+        cloud_row.addWidget(self.cloud_provider)
+        self.cloud_key = QLineEdit()
+        self.cloud_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.cloud_key.setPlaceholderText("API key (never shared)")
+        cloud_row.addWidget(self.cloud_key, stretch=1)
+        self.use_cloud_button = QPushButton("Save cloud AI")
+        self.use_cloud_button.clicked.connect(self.use_cloud)
+        cloud_row.addWidget(self.use_cloud_button)
+        column.addLayout(cloud_row)
+
+        self.basic_radio = QRadioButton("Basic Mode")
+        column.addWidget(self.basic_radio)
+        basic_text = QLabel(
+            "No AI. PAIOS plans deterministically — private, instant,"
+            " and always available. You can turn AI on later in"
+            " Settings."
+        )
+        basic_text.setObjectName("subtitle")
+        basic_text.setWordWrap(True)
+        column.addWidget(basic_text)
+
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+        column.addWidget(self.status_label)
+        column.addStretch(1)
+
+    # --- backend calls (all optional; failures inform, never block) ------
+
+    def _client(self) -> ApiClient:
+        return ApiClient(self._wizard.chosen_url(), timeout=4.0)
 
     def initializePage(self) -> None:  # Qt naming
-        client = ApiClient(self._wizard.chosen_url(), timeout=2.0)
         try:
-            status = client.assistant_status()
+            setup = self._client().assistant_setup()
         except Exception:
-            self.provider_label.setText("(backend unreachable)")
-            self.available_label.setText("—")
-            self.summary_label.setText(
-                "Could not reach the backend, so the AI provider is"
-                " unknown. You can finish setup now — PAIOS will check"
-                " again once the backend is running."
+            self.hardware_label.setText(
+                "Backend not reachable — hardware detection and model"
+                " installation will be available from Settings once"
+                " PAIOS is running. You can finish setup now."
             )
+            self.install_button.setEnabled(False)
+            self.use_local_button.setEnabled(False)
+            self.use_cloud_button.setEnabled(False)
             return
-        provider = str(status.get("provider", "none"))
-        self.provider_label.setText(provider)
-        if status.get("available"):
-            self.available_label.setText("yes")
-            self.summary_label.setText(
-                f"Backend connected. AI provider: {provider} — AI-assisted"
-                " planning is ready."
-            )
-            return
-        self.available_label.setText("no")
-        reason = status.get("reason")
-        message = (
-            f"Backend connected. AI provider: {provider}. PAIOS will use"
-            " deterministic planning until an AI provider is configured"
-            " on the backend — everything still works."
+        profile = setup.get("hardware") or {}
+        models = setup.get("recommended_models") or []
+        recommended = next(
+            (m for m in models if m.get("recommended")), None
         )
-        if reason:
-            message += f"\n\nDetails: {reason}"
-        self.summary_label.setText(message)
+        self._recommended_model = (
+            recommended.get("name") if recommended else None
+        )
+        gpu = profile.get("gpu_name")
+        self.hardware_label.setText(
+            f"Detected: {profile.get('ram_gb', '?')} GB RAM,"
+            f" {profile.get('cpu_cores', '?')} CPU cores"
+            + (f", {gpu}" if gpu else "")
+            + (
+                f".\nRecommended model: {recommended.get('label')}"
+                f" ({recommended.get('name')})"
+                if recommended
+                else ""
+            )
+        )
+        ollama = setup.get("ollama") or {}
+        if not ollama.get("server_running"):
+            self.status_label.setText(
+                "Ollama is not installed yet. Get it free from"
+                " https://ollama.com/download — then come back (or use"
+                " Settings later) to install the model."
+            )
+            self.install_button.setEnabled(False)
+        elif any(
+            m.get("name") == self._recommended_model
+            for m in ollama.get("models") or []
+        ):
+            self.status_label.setText(
+                "The recommended model is already installed — click"
+                " 'Use local AI' to turn it on."
+            )
+
+    def install_model(self) -> None:
+        if not self._recommended_model:
+            return
+        try:
+            result = self._client().assistant_ollama_pull(
+                self._recommended_model
+            )
+        except Exception as error:
+            self.status_label.setText(f"Could not start download: {error}")
+            return
+        if result.get("started"):
+            self.status_label.setText(
+                f"Downloading {self._recommended_model} in the"
+                " background (a few GB — this can take a while). You"
+                " can finish setup; when the download completes, click"
+                " 'Use local AI' here or in Settings."
+            )
+        else:
+            self.status_label.setText(
+                result.get("reason") or "Download did not start."
+            )
+
+    def use_local(self) -> None:
+        try:
+            status = self._client().set_assistant_config(
+                "ollama", model=self._recommended_model
+            )
+        except Exception as error:
+            self.status_label.setText(f"Could not apply: {error}")
+            return
+        if status.get("available"):
+            self.status_label.setText(
+                "Local AI is ready — PAIOS is now using"
+                f" {self._recommended_model or 'your local model'}."
+            )
+        else:
+            self.status_label.setText(
+                "Saved. Not active yet: "
+                + str(status.get("reason") or "")
+                + " PAIOS keeps working deterministically meanwhile."
+            )
+
+    def use_cloud(self) -> None:
+        key = self.cloud_key.text().strip()
+        provider = self.cloud_provider.currentText()
+        if not key:
+            self.status_label.setText(
+                "Enter your API key first (it stays on this computer)."
+            )
+            return
+        try:
+            status = self._client().set_assistant_config(
+                provider, api_key=key
+            )
+        except Exception as error:
+            self.status_label.setText(f"Could not apply: {error}")
+            return
+        self.cloud_key.clear()
+        if status.get("warning"):
+            self.status_label.setText(status["warning"])
+        elif status.get("available"):
+            self.status_label.setText(
+                f"Cloud AI ready — PAIOS is now using {provider}."
+            )
+        else:
+            self.status_label.setText(
+                "Saved, but the provider is not answering yet: "
+                + str(status.get("reason") or "")
+            )
+
+    def intelligence_mode(self) -> str:
+        if self.local_radio.isChecked():
+            return "local"
+        if self.cloud_radio.isChecked():
+            return "cloud"
+        return "basic"
 
 
 class _StylePage(QWizardPage):
@@ -194,6 +354,118 @@ class _StylePage(QWizardPage):
 
     def planning_style(self) -> str:
         return "structured" if self.structured.isChecked() else "flexible"
+
+
+class _PairPhonePage(QWizardPage):
+    """Optional: pair the Android companion right in the first run.
+    One button generates the code; skipping is always fine — the
+    Mobile page in the app offers the same later."""
+
+    def __init__(self, wizard: "FirstRunWizard") -> None:
+        super().__init__()
+        self._wizard = wizard
+        self.setTitle("Pair your phone (optional)")
+        self.setSubTitle(
+            "The PAIOS companion app shows your day, captures notes"
+            " and talks to your AI — your data stays on this computer."
+        )
+        column = QVBoxLayout(self)
+        steps = QLabel(
+            "1. Install the PAIOS companion app on your Android phone."
+            "\n2. Make sure phone and computer are on the same Wi-Fi."
+            "\n3. Click the button below and enter the code in the"
+            " app's Settings → Pair with desktop."
+        )
+        steps.setWordWrap(True)
+        column.addWidget(steps)
+        self.generate_button = QPushButton("Generate pairing code")
+        self.generate_button.clicked.connect(self.generate)
+        row = QHBoxLayout()
+        row.addWidget(self.generate_button)
+        row.addStretch(1)
+        column.addLayout(row)
+        self.code_label = QLabel("")
+        self.code_label.setObjectName("todayHeader")
+        column.addWidget(self.code_label)
+        self.status_label = QLabel(
+            "You can skip this and pair later from the Mobile page."
+        )
+        self.status_label.setObjectName("subtitle")
+        self.status_label.setWordWrap(True)
+        column.addWidget(self.status_label)
+        column.addStretch(1)
+
+    def generate(self) -> None:
+        client = ApiClient(self._wizard.chosen_url(), timeout=4.0)
+        try:
+            payload = client.mobile_pairing_start()
+        except Exception:
+            self.status_label.setText(
+                "Could not reach the backend — pair later from the"
+                " Mobile page once PAIOS is running."
+            )
+            return
+        self.code_label.setText(str(payload.get("code", "")))
+        self.status_label.setText(
+            "Enter this code on the phone within 5 minutes. It works"
+            " once; generate a new one any time."
+        )
+
+
+class _MorningRoutinePage(QWizardPage):
+    """Optional: one click creates the user's first morning routine —
+    a daily recurrence the Scheduler expands like any other."""
+
+    DEFAULT_TITLE = "Plan my morning"
+
+    def __init__(self, wizard: "FirstRunWizard") -> None:
+        super().__init__()
+        self._wizard = wizard
+        self.setTitle("Your first morning routine (optional)")
+        self.setSubTitle(
+            "A small daily anchor: PAIOS schedules it every morning;"
+            " open Planning when it fires to shape your day."
+        )
+        form = QFormLayout(self)
+        self.routine_title = QLineEdit(self.DEFAULT_TITLE)
+        form.addRow("Routine", self.routine_title)
+        self.routine_time = QTimeEdit()
+        self.routine_time.setDisplayFormat("HH:mm")
+        self.routine_time.setTime(
+            self.routine_time.time().fromString("08:30", "HH:mm")
+        )
+        form.addRow("Every day at", self.routine_time)
+        self.create_button = QPushButton("Create routine")
+        self.create_button.clicked.connect(self.create_routine)
+        form.addRow(self.create_button)
+        self.status_label = QLabel(
+            "Skip if you prefer — routines live under Planning."
+        )
+        self.status_label.setObjectName("subtitle")
+        self.status_label.setWordWrap(True)
+        form.addRow(self.status_label)
+
+    def create_routine(self) -> None:
+        client = ApiClient(self._wizard.chosen_url(), timeout=4.0)
+        title = self.routine_title.text().strip() or self.DEFAULT_TITLE
+        try:
+            client.create_recurrence(
+                title,
+                self.routine_time.time().toString("HH:mm"),
+                ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                category="recurring",
+            )
+        except Exception as error:
+            self.status_label.setText(
+                f"Could not create it now ({error}) — add it later"
+                " under Planning → recurrences."
+            )
+            return
+        self.create_button.setEnabled(False)
+        self.status_label.setText(
+            f"Done — '{title}' will appear on your plan every day at "
+            f"{self.routine_time.time().toString('HH:mm')}."
+        )
 
 
 class _ThemePage(QWizardPage):
@@ -226,13 +498,19 @@ class FirstRunWizard(QWizard):
         self.url_page = _UrlPage(base_url)
         self.preferences_page = _PreferencesPage(refresh_seconds)
         self.style_page = _StylePage()
-        self.provider_page = _ProviderPage(self)
+        self.provider_page = _IntelligencePage(self)
+        self.pair_page = _PairPhonePage(self)
+        self.routine_page = _MorningRoutinePage(self)
         self.theme_page = _ThemePage()
+        # The non-developer path: connect -> preferences -> style ->
+        # Setup AI -> Pair phone -> first morning routine -> theme.
         for page in (
             self.url_page,
             self.preferences_page,
             self.style_page,
             self.provider_page,
+            self.pair_page,
+            self.routine_page,
             self.theme_page,
         ):
             self.addPage(page)
@@ -252,6 +530,7 @@ class FirstRunWizard(QWizard):
             "work_hours_end": preferences.work_end.time().toString("HH:mm"),
             "notifications_enabled": preferences.notifications.isChecked(),
             "planning_style": self.style_page.planning_style(),
+            "intelligence_mode": self.provider_page.intelligence_mode(),
             "theme": self.theme_page.theme_box.currentText(),
             "first_run_complete": True,
         }

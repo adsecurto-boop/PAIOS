@@ -21,6 +21,10 @@ class RequestLog {
 
 ApiClient Function(String) mockFactory(RequestLog log,
     {bool offline = false, List<Map<String, dynamic>>? events}) {
+  // Stateful inbox: archive/delete mutate it, exactly like the real
+  // backend — a dismissed row must not resurrect unchanged on refresh.
+  final inbox =
+      (inboxJson()['items'] as List).cast<Map<String, dynamic>>().toList();
   return (url) => ApiClient(url,
       client: MockClient((request) async {
         if (offline) throw http.ClientException('connection refused');
@@ -29,6 +33,21 @@ ApiClient Function(String) mockFactory(RequestLog log,
           log.bodies.add(request.body);
         }
         final path = request.url.path;
+        final archiveMatch =
+            RegExp(r'^/inbox/([^/]+)/archive$').firstMatch(path);
+        if (archiveMatch != null && request.method == 'POST') {
+          for (final item in inbox) {
+            if (item['id'] == archiveMatch.group(1)) {
+              item['status'] = 'archived';
+            }
+          }
+          return http.Response(jsonEncode({'result': 'ok'}), 200);
+        }
+        final deleteMatch = RegExp(r'^/inbox/([^/]+)$').firstMatch(path);
+        if (deleteMatch != null && request.method == 'DELETE') {
+          inbox.removeWhere((item) => item['id'] == deleteMatch.group(1));
+          return http.Response(jsonEncode({'result': 'deleted'}), 200);
+        }
         if (path == '/dashboard') {
           return http.Response(jsonEncode(dashboardJson()), 200);
         }
@@ -53,7 +72,7 @@ ApiClient Function(String) mockFactory(RequestLog log,
           return http.Response(jsonEncode(planJson()), 200);
         }
         if (path == '/inbox' && request.method == 'GET') {
-          return http.Response(jsonEncode(inboxJson()), 200);
+          return http.Response(jsonEncode({'items': inbox}), 200);
         }
         if (path == '/templates') {
           return http.Response(jsonEncode(templatesJson()), 200);
@@ -93,6 +112,27 @@ Future<AppState> makeState(RequestLog log, {bool offline = false}) async {
       clientFactory: mockFactory(log, offline: offline));
 }
 
+/// Opens the drawer and taps [title], scrolling the drawer list first —
+/// the M21 destinations made it taller than a phone-sized viewport.
+Future<void> openScreen(WidgetTester tester, String title) async {
+  await tester.tap(find.byTooltip('Open navigation menu'));
+  await tester.pumpAndSettle();
+  final drawer = find.byType(Drawer);
+  // The drawer ListView builds lazily: off-screen entries have no
+  // element yet, so the finder must stay unevaluated (no .last) until
+  // dragUntilVisible has scrolled them into existence.
+  final entry = find.descendant(
+      of: drawer, matching: find.textContaining(title));
+  await tester.dragUntilVisible(
+    entry,
+    find.descendant(of: drawer, matching: find.byType(ListView)).first,
+    const Offset(0, -80),
+  );
+  await tester.pumpAndSettle();
+  await tester.tap(entry.last);
+  await tester.pumpAndSettle();
+}
+
 void main() {
   testWidgets('dashboard shows every mission card', (tester) async {
     // A tall surface so the lazy ListView mounts every card at once.
@@ -129,12 +169,10 @@ void main() {
 
     for (final title in [
       'Timeline', 'Quick Capture', 'Recommendations', 'Events', 'Goals',
-      'Projects', 'Contexts', 'Resources', 'Reflections', 'Settings',
+      'Projects', 'Contexts', 'Resources', 'Reflections',
+      'Daily Journal', 'Study', 'AI Assistant', 'Settings',
     ]) {
-      await tester.tap(find.byTooltip('Open navigation menu'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text(title).last);
-      await tester.pumpAndSettle();
+      await openScreen(tester, title);
       expect(find.widgetWithText(AppBar, title), findsOneWidget,
           reason: 'did not land on $title');
     }
@@ -202,10 +240,7 @@ void main() {
     // The connect notice is unread.
     expect(state.center.unreadCount, greaterThan(0));
 
-    await tester.tap(find.byTooltip('Open navigation menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Notifications').last);
-    await tester.pumpAndSettle();
+    await openScreen(tester, 'Notifications');
 
     await tester.tap(find.text('Mark all read'));
     await tester.pumpAndSettle();
@@ -222,10 +257,7 @@ void main() {
     await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Open navigation menu'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Settings').last);
-    await tester.pumpAndSettle();
+    await openScreen(tester, 'Settings');
 
     await tester.enterText(
         find.byType(TextField).first, 'http://10.0.0.7:8765');

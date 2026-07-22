@@ -95,13 +95,19 @@ class UpdateEngine:
 
     def installed_version(self) -> str:
         """version.txt when present (fast path, written by installs and
-        updates), else the install venv's own answer."""
+        updates), else PAIOS.exe's own answer (standalone installs),
+        else the install venv's answer (legacy installs)."""
         if self.config.current_version:
             return self.config.current_version
         if self.config.version_file.is_file():
-            text = self.config.version_file.read_text(encoding="utf-8").strip()
+            text = self.config.version_file.read_text(
+                encoding="utf-8-sig"
+            ).strip()
             if text:
                 return text
+        reported = self._launcher_reported_version()
+        if reported is not None:
+            return reported
         python = self._venv_python()
         if python is not None:
             try:
@@ -161,7 +167,17 @@ class UpdateEngine:
         backup = self._backup(plan.current_version)
         self.log(f"backup: {backup}")
         try:
-            code = self.runner([str(setup)], _INSTALL_TIMEOUT_SECONDS)
+            # One silent command line drives both installer flavors:
+            # Inno Setup honors the switches, the console installer
+            # tolerates and ignores them.
+            code = self.runner(
+                [
+                    str(setup),
+                    "/VERYSILENT", "/SUPPRESSMSGBOXES",
+                    "/NORESTART", "/CLOSEAPPLICATIONS",
+                ],
+                _INSTALL_TIMEOUT_SECONDS,
+            )
             if code != 0:
                 raise UpdateError(f"Installer exited with code {code}")
             installed = self._post_install_version()
@@ -211,6 +227,15 @@ class UpdateEngine:
         with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
             if self.config.launcher_exe.is_file():
                 archive.write(self.config.launcher_exe, "PAIOS.exe")
+            internal = self.config.install_dir / "_internal"
+            if internal.is_dir():  # standalone (onedir) application
+                for item in internal.rglob("*"):
+                    if item.is_file():
+                        archive.write(
+                            item,
+                            Path("_internal")
+                            / item.relative_to(internal),
+                        )
             for tree in self._paios_package_dirs():
                 for item in tree.rglob("*"):
                     if item.is_file():
@@ -234,8 +259,16 @@ class UpdateEngine:
             for tree in self._paios_package_dirs():
                 shutil.rmtree(tree, ignore_errors=True)
         with zipfile.ZipFile(backup) as archive:
-            for name in archive.namelist():
+            names = archive.namelist()
+            if any(name.startswith("_internal/") for name in names):
+                shutil.rmtree(
+                    self.config.install_dir / "_internal",
+                    ignore_errors=True,
+                )
+            for name in names:
                 if name == "PAIOS.exe":
+                    archive.extract(name, self.config.install_dir)
+                elif name.startswith("_internal/"):
                     archive.extract(name, self.config.install_dir)
                 elif name.startswith("site-packages/") and (
                     site_packages is not None
@@ -248,9 +281,30 @@ class UpdateEngine:
                     ) as target:
                         shutil.copyfileobj(source, target)
 
+    def _launcher_reported_version(self) -> str | None:
+        """`PAIOS.exe --version` — the standalone install's own answer
+        (and a liveness proof: the freshly installed binary must run)."""
+        if not self.config.launcher_exe.is_file():
+            return None
+        try:
+            completed = subprocess.run(
+                [str(self.config.launcher_exe), "--version"],
+                capture_output=True, text=True, timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        text = (completed.stdout or "").strip()
+        if completed.returncode != 0 or not text or text == "unknown":
+            return None
+        return text
+
     def _post_install_version(self) -> str:
         # Never trust a stale version.txt for the health check — ask the
-        # install itself.
+        # install itself: the standalone launcher first (proves the new
+        # binary starts), then the legacy venv query.
+        reported = self._launcher_reported_version()
+        if reported is not None:
+            return reported
         probe = UpdaterConfig(
             install_dir=self.config.install_dir, repo=self.config.repo
         )

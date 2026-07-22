@@ -31,6 +31,9 @@ class AssistantTask(Enum):
     # only; the assistant still never creates, mutates, or schedules.
     CLASSIFY_CAPTURE = "ClassifyCapture"
     EXPLAIN_DAY_PLAN = "ExplainDayPlan"
+    # Intelligence layer: daily rhythm voices — still observations only.
+    MORNING_PLAN = "MorningPlan"
+    EVENING_REVIEW = "EveningReview"
 
 
 #: task -> prompt template name (all templates exist in prompts.TEMPLATES).
@@ -51,6 +54,8 @@ TASK_TEMPLATES: dict[AssistantTask, str] = {
     AssistantTask.ANSWER_QUESTION: "explain",
     AssistantTask.CLASSIFY_CAPTURE: "planning_classification",
     AssistantTask.EXPLAIN_DAY_PLAN: "day_plan_explanation",
+    AssistantTask.MORNING_PLAN: "morning_planning",
+    AssistantTask.EVENING_REVIEW: "evening_review",
 }
 
 

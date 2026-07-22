@@ -40,6 +40,7 @@ from paios_gui.pages import (
     HistoryPage,
     KnowledgePage,
     LearningPage,
+    MobileDevicesPage,
     NotificationsPage,
     ProjectsPage,
     ResourcesPage,
@@ -118,6 +119,7 @@ class MainWindow(QMainWindow):
             ("Backups", BackupsPage(self)),
             ("Logs", LogPage(self)),
             ("Notifications", NotificationsPage(self)),
+            ("Mobile", MobileDevicesPage(self)),
             ("Settings", SettingsPage(self)),
         ]
         #: Nav index of the Notifications page (looked up, not counted).

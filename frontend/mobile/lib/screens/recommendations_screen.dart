@@ -1,9 +1,8 @@
-// Recommendations: Accept / Reject (one endpoint per button).
+﻿// Recommendations: Accept / Reject (one endpoint per button).
 import 'package:flutter/material.dart';
 
 import '../models/models.dart';
 import '../services/api_client.dart';
-import '../services/app_state.dart';
 import 'rest_list_screen.dart';
 
 class RecommendationsScreen extends RestListScreen {
@@ -30,8 +29,8 @@ class RecommendationsScreen extends RestListScreen {
             Text(recommendation.reason),
             const SizedBox(height: 4),
             Text(
-              'priority ${recommendation.priority?.toStringAsFixed(2) ?? '—'}'
-              ' · expires ${clock(recommendation.expiresAt)}',
+              'priority ${recommendation.priority?.toStringAsFixed(2) ?? 'â€”'}'
+              ' Â· expires ${clock(recommendation.expiresAt)}',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             Row(
