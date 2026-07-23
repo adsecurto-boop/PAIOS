@@ -15,13 +15,43 @@ class Settings {
   String? deviceToken;
   String deviceName;
 
+  /// M25 (remote access): the relay endpoint + account the phone falls
+  /// back to when it is not on the desktop's Wi-Fi. Empty = LAN only.
+  String relayUrl;
+  String account;
+
   Settings({
     this.baseUrl = defaultBaseUrl,
     this.refreshSeconds = defaultRefreshSeconds,
     this.darkTheme = true,
     this.deviceToken,
     this.deviceName = '',
+    this.relayUrl = '',
+    this.account = 'default',
   });
+
+  /// A copy with selected fields changed. ``clearToken: true`` forgets
+  /// the pairing (deviceToken is otherwise preserved, so a plain
+  /// copyWith never accidentally unpairs the device).
+  Settings copyWith({
+    String? baseUrl,
+    int? refreshSeconds,
+    bool? darkTheme,
+    String? deviceToken,
+    String? deviceName,
+    String? relayUrl,
+    String? account,
+    bool clearToken = false,
+  }) =>
+      Settings(
+        baseUrl: baseUrl ?? this.baseUrl,
+        refreshSeconds: refreshSeconds ?? this.refreshSeconds,
+        darkTheme: darkTheme ?? this.darkTheme,
+        deviceToken: clearToken ? null : (deviceToken ?? this.deviceToken),
+        deviceName: deviceName ?? this.deviceName,
+        relayUrl: relayUrl ?? this.relayUrl,
+        account: account ?? this.account,
+      );
 }
 
 class SettingsService {
@@ -30,6 +60,8 @@ class SettingsService {
   static const _keyDark = 'dark_theme';
   static const _keyDeviceToken = 'device_token';
   static const _keyDeviceName = 'device_name';
+  static const _keyRelayUrl = 'relay_url';
+  static const _keyAccount = 'relay_account';
   static const keyDashboardCache = 'dashboard_cache';
   static const keyNotifications = 'notification_history';
   static const keyEventsCache = 'events_cache';
@@ -53,6 +85,8 @@ class SettingsService {
         darkTheme: _prefs.getBool(_keyDark) ?? true,
         deviceToken: _prefs.getString(_keyDeviceToken),
         deviceName: _prefs.getString(_keyDeviceName) ?? '',
+        relayUrl: _prefs.getString(_keyRelayUrl) ?? '',
+        account: _prefs.getString(_keyAccount) ?? 'default',
       );
 
   Future<void> write(Settings settings) async {
@@ -66,6 +100,8 @@ class SettingsService {
       await _prefs.setString(_keyDeviceToken, token);
     }
     await _prefs.setString(_keyDeviceName, settings.deviceName);
+    await _prefs.setString(_keyRelayUrl, settings.relayUrl);
+    await _prefs.setString(_keyAccount, settings.account);
   }
 
   String? readString(String key) => _prefs.getString(key);

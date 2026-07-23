@@ -123,6 +123,43 @@ def remove_model(model: str, runner=None) -> dict:
     return {"removed": True, "model": model}
 
 
+def model_info(
+    model: str, base_url: str | None = None, transport=None
+) -> dict:
+    """Context length, parameter size and quantization for one installed
+    model (Ollama's /api/show). Best-effort: ``{"available": False}``
+    when the server or the model is absent — the UI degrades to 'unknown'
+    rather than failing. ``transport`` is the injectable POST seam."""
+    from paios.assistant.adapters.ollama import (
+        default_transport,
+        resolve_base_url,
+    )
+
+    send = transport if transport is not None else default_transport
+    url = resolve_base_url(base_url)
+    try:
+        payload = send(
+            f"{url}/api/show", {"name": model}, _QUERY_TIMEOUT_SECONDS
+        )
+    except Exception:
+        return {"available": False}
+    details = payload.get("details") or {}
+    # The context-length key is architecture-prefixed, e.g.
+    # "qwen2.context_length" or "llama.context_length".
+    context_length = None
+    for key, value in (payload.get("model_info") or {}).items():
+        if key.endswith("context_length"):
+            context_length = value
+            break
+    return {
+        "available": True,
+        "context_length": context_length,
+        "parameter_size": details.get("parameter_size"),
+        "quantization": details.get("quantization_level"),
+        "family": details.get("family"),
+    }
+
+
 def setup_report(base_url: str | None = None, fetcher=default_fetcher) -> dict:
     """Hardware + recommendations + server state: everything the
     "Choose your PAIOS Intelligence Mode" screen needs in one call."""

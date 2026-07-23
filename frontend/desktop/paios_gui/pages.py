@@ -3,8 +3,9 @@ page-local actions the mission requires. Each page's ``refresh(client)``
 issues its GET calls; each toolbar button issues exactly one REST call
 through the window's ``run_action``."""
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -389,19 +390,35 @@ class MobileDevicesPage(TablePage):
         " its Settings → Pair with desktop."
     )
 
+    #: The pairing code lives for five minutes (mobile_support TTL); the
+    #: countdown is local so it is right whatever clock the server uses.
+    CODE_TTL_SECONDS = 5 * 60
+
     def __init__(self, window) -> None:
         super().__init__(window)
         # The code panel sits between the toolbar and the table.
         self.code_label = QLabel("")
         self.code_label.setObjectName("todayHeader")
         self.code_label.hide()
+        self.countdown_label = QLabel("")
+        self.countdown_label.setObjectName("statusChip")
+        self.countdown_label.hide()
         self.code_hint = QLabel("")
         self.code_hint.setObjectName("subtitle")
         self.code_hint.setWordWrap(True)
         self.code_hint.hide()
+        self.qr_label = QLabel("")
+        self.qr_label.hide()
         layout = self.layout()
         layout.insertWidget(2, self.code_label)
-        layout.insertWidget(3, self.code_hint)
+        layout.insertWidget(3, self.countdown_label)
+        layout.insertWidget(4, self.qr_label)
+        layout.insertWidget(5, self.code_hint)
+        # One-second expiry countdown for the visible code.
+        self._remaining = 0
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._tick_countdown)
 
     def _build_toolbar(self) -> None:
         self._add_button("Generate pairing code", self.on_generate)
@@ -423,14 +440,82 @@ class MobileDevicesPage(TablePage):
             code = payload.get("code", "")
             self.code_label.setText(f"Pairing code:  {code}")
             self.code_label.show()
-            self.code_hint.setText(
-                "Enter this code in the phone app within 5 minutes"
-                " (Settings → Pair with desktop). The phone must be on"
-                " the same network and the code works once."
+            self._start_countdown()
+            address, on_lan, remote_on = self._connection_info()
+            self._show_qr(address, remote_on)
+            steps = (
+                "1. On the phone app: Settings → Pair with desktop.\n"
+                f"2. Enter the server address: {address}\n"
+                "3. Type the code above (or scan the QR). The code works"
+                " once, within 5 minutes."
             )
+            if remote_on:
+                steps += (
+                    "\n\nRemote access is on — after pairing, the phone"
+                    " works from any network, not just this Wi-Fi."
+                )
+            elif not on_lan:
+                steps += (
+                    "\n\nNote: PAIOS is in Local Only mode, so the phone"
+                    " cannot reach it yet. Turn on Local Network (or set"
+                    " up Remote access) on the Networking page first."
+                )
+            self.code_hint.setText(steps)
             self.code_hint.show()
 
         self._window.run_action(call, "Pairing code generated")
+
+    def _connection_info(self) -> tuple[str, bool, bool]:
+        """(human address, is-LAN-reachable, is-remote-on). Falls back
+        to the client's base URL if networking is unavailable."""
+        try:
+            facts = self._window.client.system_network()
+        except Exception:
+            return self._window.client.base_url, False, False
+        on_lan = facts.get("mode") == "lan"
+        address = facts.get("lan_url") if on_lan else facts.get(
+            "loopback_url"
+        )
+        remote_on = False
+        try:
+            relay = self._window.client.system_relay()
+            remote_on = bool(relay.get("enabled") and relay.get("relay_url"))
+            self._relay = relay
+        except Exception:
+            self._relay = {}
+        return address or self._window.client.base_url, on_lan, remote_on
+
+    def _show_qr(self, address: str, remote_on: bool) -> None:
+        from paios_gui import qr
+
+        relay = getattr(self, "_relay", {}) or {}
+        payload = qr.connection_uri(
+            lan_url=address if not address.startswith("http://127.") else None,
+            relay_url=relay.get("relay_url") if remote_on else None,
+            account=relay.get("account", "default"),
+        ) or address
+        self.qr_label.setPixmap(qr.pixmap(payload))
+        self.qr_label.show()
+
+    def _start_countdown(self) -> None:
+        self._remaining = self.CODE_TTL_SECONDS
+        self._render_countdown()
+        self.countdown_label.show()
+        self._timer.start()
+
+    def _tick_countdown(self) -> None:
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._timer.stop()
+            self.countdown_label.setText("Code expired — generate a new one")
+            self.code_label.hide()
+            self.qr_label.hide()
+            return
+        self._render_countdown()
+
+    def _render_countdown(self) -> None:
+        minutes, seconds = divmod(max(self._remaining, 0), 60)
+        self.countdown_label.setText(f"Expires in {minutes}:{seconds:02d}")
 
     def on_revoke(self) -> None:
         row = self._require_selection()
@@ -465,24 +550,34 @@ class SettingsPage(QWidget):
         layout.addWidget(heading)
 
         row = QHBoxLayout()
-        row.addWidget(QLabel("Refresh interval (seconds):"))
+        interval_label = QLabel("Refresh interval (seconds):")
+        row.addWidget(interval_label)
         self.interval = QSpinBox()
         self.interval.setRange(MIN_REFRESH_SECONDS, MAX_REFRESH_SECONDS)
         self.interval.setValue(window.config.refresh_seconds)
+        self.interval.setAccessibleName("Refresh interval in seconds")
         self.interval.valueChanged.connect(window.set_refresh_interval)
         row.addWidget(self.interval)
         row.addStretch(1)
         layout.addLayout(row)
 
+        # Theme switch (M24): dark or light, applied live and persisted.
+        theme_row = QHBoxLayout()
+        theme_row.addWidget(QLabel("Theme:"))
+        self.theme_box = QComboBox()
+        self.theme_box.addItems(["dark", "light"])
+        self.theme_box.setCurrentText(getattr(window.config, "theme", "dark"))
+        self.theme_box.setAccessibleName("Application theme")
+        self.theme_box.currentTextChanged.connect(window.set_theme)
+        theme_row.addWidget(self.theme_box)
+        theme_row.addStretch(1)
+        layout.addLayout(theme_row)
+
         self.server_label = QLabel(f"Server: {window.client.base_url}")
         layout.addWidget(self.server_label)
-        layout.addWidget(
-            QLabel(
-                "Shortcuts: F5 / Ctrl+R refresh · Ctrl+1…Ctrl+9 pages"
-                " · Ctrl+N new event · Ctrl+I inbox capture"
-                " · Ctrl+P planning · Ctrl+F search · Ctrl+Q quit"
-            )
-        )
+        shortcuts_button = QPushButton("Keyboard shortcuts (F1)…")
+        shortcuts_button.clicked.connect(window.show_shortcuts)
+        layout.addWidget(shortcuts_button)
         layout.addStretch(1)
 
     def refresh(self, client) -> None:

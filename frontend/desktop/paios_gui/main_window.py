@@ -28,7 +28,9 @@ from paios_gui.config import GuiConfig
 from paios_gui.dashboard_page import DashboardPage
 from paios_gui.events_page import EventsPage
 from paios_gui.inbox_page import InboxPage
+from paios_gui.intelligence_page import IntelligencePage
 from paios_gui.log_page import LogPage
+from paios_gui.networking_page import NetworkingPage
 from paios_gui.notifications import (
     DashboardWatcher,
     GuiNotification,
@@ -83,6 +85,8 @@ class MainWindow(QMainWindow):
         self.search_edit.setPlaceholderText("filter current table (Ctrl+F)")
         self.search_edit.setFixedWidth(260)
         self.search_edit.setClearButtonEnabled(True)
+        self.search_edit.setAccessibleName("Filter the current table")
+        self.search_edit.setToolTip("Filter the current table (Ctrl+F)")
         self.search_edit.textChanged.connect(self._on_search)
         search_row.addWidget(self.search_edit)
         outer.addLayout(search_row)
@@ -92,7 +96,9 @@ class MainWindow(QMainWindow):
 
         self.navigation = QListWidget()
         self.navigation.setObjectName("navigation")
-        self.navigation.setFixedWidth(150)
+        self.navigation.setFixedWidth(168)
+        self.navigation.setAccessibleName("Main navigation")
+        self.navigation.setToolTip("Navigate pages (Ctrl+1…9, F1 for shortcuts)")
         body.addWidget(self.navigation)
 
         self.pages = QStackedWidget()
@@ -119,6 +125,8 @@ class MainWindow(QMainWindow):
             ("Backups", BackupsPage(self)),
             ("Logs", LogPage(self)),
             ("Notifications", NotificationsPage(self)),
+            ("Intelligence", IntelligencePage(self)),
+            ("Networking", NetworkingPage(self)),
             ("Mobile", MobileDevicesPage(self)),
             ("Settings", SettingsPage(self)),
         ]
@@ -199,6 +207,14 @@ class MainWindow(QMainWindow):
             self,
             activated=lambda: self.search_edit.setFocus(),
         )
+        QShortcut(
+            QKeySequence("Ctrl+,"),
+            self,
+            activated=lambda: self.navigation.setCurrentRow(
+                self._row_of("Settings")
+            ),
+        )
+        QShortcut(QKeySequence("F1"), self, activated=self.show_shortcuts)
         quit_action = QAction(self)
         quit_action.setShortcut(QKeySequence("Ctrl+Q"))
         quit_action.triggered.connect(self.close)
@@ -239,6 +255,27 @@ class MainWindow(QMainWindow):
         self.config.refresh_seconds = self.config.clamp_refresh(int(seconds))
         self._timer.start(self.config.refresh_seconds * 1000)
         self._update_footer()
+
+    # --- theme (M24) -----------------------------------------------------
+
+    def set_theme(self, mode: str) -> str:
+        """Apply the dark or light theme to the whole app at runtime and
+        remember the choice. Returns the normalized mode."""
+        from PySide6.QtWidgets import QApplication
+
+        from paios_gui import settings_store
+        from paios_gui.theme import apply_theme
+
+        applied = apply_theme(QApplication.instance(), mode)
+        self.config.theme = applied
+        settings_store.save_settings({"theme": applied})
+        return applied
+
+    def show_shortcuts(self) -> None:
+        """A discoverable list of every keyboard shortcut (F1)."""
+        from paios_gui.dialogs import ShortcutsDialog
+
+        ShortcutsDialog(self).exec()
 
     # --- actions ---------------------------------------------------------
 

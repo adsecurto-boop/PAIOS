@@ -164,6 +164,14 @@ class ApiServer:
         self._mobile = PairingService(self._config.data_dir)
         self._http: HTTPServer | None = None
         self._serving = False
+        #: M22: mDNS advertiser, started only in Local Network mode so a
+        #: phone can discover the desktop without a typed IP. None in
+        #: loopback mode (nothing on 127.0.0.1 to discover).
+        self._advertiser = None
+        #: M23: the outbound relay connector (remote access), started when
+        #: relay-settings.json is enabled and configured. None otherwise.
+        self._relay_connector = None
+        self._bound_port = None
 
     def assistant_summary(self) -> list[str]:
         """Human-readable startup lines: provider, reason, active mode."""
@@ -190,11 +198,19 @@ class ApiServer:
         return self._http.server_address[1]
 
     def start(self) -> None:
-        """Start the Application and bind the socket (no serving yet)."""
+        """Start the Application and bind the socket (no serving yet).
+
+        The bind host honours the persisted access mode (M21): a phone
+        can only reach PAIOS after the user picks Local Network on the
+        Networking page, which writes network-settings.json here."""
         if not self._app.started:
             self._app.start()
+        import paios.system.network as network
+
+        data_dir = Path(self._config.data_dir)
+        bind_host = network.resolve_bind_host(data_dir, self._config.host)
         http = HTTPServer(
-            (self._config.host, self._config.port), _ApiRequestHandler
+            (bind_host, self._config.port), _ApiRequestHandler
         )
         http.router = ApiRouter(  # type: ignore[attr-defined]
             self._app,
@@ -204,13 +220,95 @@ class ApiServer:
             assistant_provider=self._assistant_provider,
             assistant_reason=self._assistant_reason,
             mobile=self._mobile,
-            ai_dir=Path(self._config.data_dir),
+            ai_dir=data_dir,
+            network_dir=data_dir,
+            bound_host=bind_host,
+            bound_port=self._http_port_hint(http),
+            discovery=self._start_discovery(bind_host, http, network),
+            relay_status=self._relay_status,
+            relay_reload=self._reload_relay,
+            relay_authorize=self._relay_authorize,
         )
         self._http = http
+        self._bound_port = self._http_port_hint(http)
+        self._start_relay()
         import logging
 
         for line in self.assistant_summary():
             logging.getLogger("paios.api").info(line)
+
+    # --- remote access connector (M23) -----------------------------------
+
+    def _start_relay(self) -> None:
+        """Open the outbound tunnel when remote access is configured and
+        enabled. Best-effort: a bad/absent config simply leaves remote
+        access off (LAN and loopback are unaffected)."""
+        from paios.api import relay_settings
+        from paios.system.relay_client import RelayConnector
+
+        data_dir = self._config.data_dir
+        settings = relay_settings.config(data_dir)
+        key = relay_settings.account_key_for(data_dir)
+        if not settings["enabled"] or not settings["relay_url"] or not key:
+            return
+        connector = RelayConnector(
+            settings["relay_url"],
+            settings["account"],
+            key,
+            f"http://127.0.0.1:{self._bound_port}",
+        )
+        connector.start()
+        self._relay_connector = connector
+
+    def _reload_relay(self) -> None:
+        """Apply changed relay settings without restarting the server."""
+        if self._relay_connector is not None:
+            self._relay_connector.stop()
+            self._relay_connector = None
+        self._start_relay()
+
+    def _relay_status(self) -> dict:
+        from paios.api import relay_settings
+
+        status = relay_settings.config(self._config.data_dir)
+        if self._relay_connector is not None:
+            status.update(self._relay_connector.status())
+        else:
+            status.update({"connected": False, "last_error": None})
+        return status
+
+    def _relay_authorize(self, token_hash: str) -> bool:
+        """Register a freshly paired phone with the relay so it can be
+        reached remotely. No-op (False) when remote access is off."""
+        if self._relay_connector is None:
+            return False
+        return self._relay_connector.authorize_device(token_hash)
+
+    def _start_discovery(self, bind_host: str, http: HTTPServer, network):
+        """Advertise the API over mDNS when it is LAN-reachable, so a
+        phone finds it with no typed IP. Best-effort and loopback-safe:
+        loopback mode advertises nothing (returns None)."""
+        if bind_host != network.ANY_HOST:
+            return None
+        import paios.system.discovery as discovery
+
+        info = discovery.ServiceInfo(
+            port=self._http_port_hint(http),
+            address=network.local_ip(),
+            instance="PAIOS on " + network.hostname(),
+            hostname=network.hostname().split(".")[0] or "paios",
+            properties={"server": "paios", "path": "/mobile"},
+        )
+        advertiser = discovery.DiscoveryAdvertiser(info)
+        advertiser.start()  # never raises; False on a busy mDNS port
+        self._advertiser = advertiser
+        return advertiser
+
+    @staticmethod
+    def _http_port_hint(http: HTTPServer) -> int:
+        """The actually bound port (resolves an ephemeral 0 to the real
+        one) so the Networking page shows the address phones must use."""
+        return http.server_address[1]
 
     def serve_forever(self) -> None:
         if self._http is None:
@@ -228,6 +326,12 @@ class ApiServer:
         HTTPServer.shutdown() blocks forever unless serve_forever is
         actually running (stdlib contract), so it is signalled only then;
         a bound-but-not-serving socket is simply closed."""
+        if self._relay_connector is not None:
+            self._relay_connector.stop()
+            self._relay_connector = None
+        if self._advertiser is not None:
+            self._advertiser.stop()
+            self._advertiser = None
         if self._http is not None:
             if self._serving:
                 self._http.shutdown()

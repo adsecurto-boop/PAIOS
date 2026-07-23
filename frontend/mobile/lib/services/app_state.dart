@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/models.dart';
 import 'api_client.dart';
+import 'connection_manager.dart';
 import 'notification_center.dart';
 import 'offline_queue.dart';
 import 'settings_service.dart';
@@ -28,6 +29,11 @@ class AppState extends ChangeNotifier {
   String? lastError;
   String lastSync = '—';
 
+  /// M25: how the phone is currently reaching PAIOS (LAN / remote /
+  /// offline). Set by [resolveConnection] when a resolver is wired,
+  /// otherwise mirrors the online flag.
+  ConnectionMode connectionMode = ConnectionMode.lan;
+
   final NotificationCenter center = NotificationCenter();
   final DashboardWatcher _watcher = DashboardWatcher();
   Timer? _timer;
@@ -35,8 +41,16 @@ class AppState extends ChangeNotifier {
   /// M21: queued /mobile/logs captures, flushed on every successful poll.
   final OfflineQueue queue;
 
-  AppState(this._store, {ApiClient Function(String url)? clientFactory})
-      : settings = _store.read(),
+  /// M25 (optional): resolves the best connection (LAN -> Relay ->
+  /// Offline). Production wires a ConnectionManager here; tests inject a
+  /// client factory instead and leave this null, keeping their path.
+  final Future<Connection> Function(Settings settings)? connectionResolver;
+
+  AppState(
+    this._store, {
+    ApiClient Function(String url)? clientFactory,
+    this.connectionResolver,
+  })  : settings = _store.read(),
         client = (clientFactory ?? ApiClient.new)(_store.read().baseUrl),
         queue = OfflineQueue(_store),
         _clientFactory = clientFactory ?? ApiClient.new {
@@ -45,6 +59,23 @@ class AppState extends ChangeNotifier {
   }
 
   final ApiClient Function(String url) _clientFactory;
+
+  /// Pick the best available path and swap the client to it. No-op when
+  /// no resolver is wired (the client factory stays in charge).
+  Future<void> resolveConnection() async {
+    final resolver = connectionResolver;
+    if (resolver == null) return;
+    try {
+      final connection = await resolver(settings);
+      client.close();
+      client = connection.client;
+      client.authToken = settings.deviceToken;
+      connectionMode = connection.mode;
+      notifyListeners();
+    } catch (_) {
+      // A failed resolve leaves the current client; the next poll retries.
+    }
+  }
 
   // --- caches (permitted local stores) -----------------------------------
 
@@ -92,6 +123,7 @@ class AppState extends ChangeNotifier {
 
   void startPolling() {
     _timer?.cancel();
+    resolveConnection(); // pick the best path at start (no-op without one)
     _timer = Timer.periodic(
         Duration(seconds: settings.refreshSeconds), (_) => refresh());
   }
@@ -119,6 +151,7 @@ class AppState extends ChangeNotifier {
       await flushOfflineQueue(); // the server answered; push captures
     } on ApiUnreachableException catch (error) {
       lastError = error.detail;
+      await resolveConnection(); // a dropped LAN may switch to the relay
       _setOnline(false);
     } on ApiResponseException catch (error) {
       lastError = error.message; // server up but refused; keep snapshot
@@ -138,6 +171,13 @@ class AppState extends ChangeNotifier {
       ));
     }
     online = value;
+    // Without a resolver the mode mirrors the online flag (LAN/offline);
+    // with one, resolveConnection owns the mode (LAN/remote/offline).
+    if (connectionResolver == null) {
+      connectionMode = value ? ConnectionMode.lan : ConnectionMode.offline;
+    } else if (!value) {
+      connectionMode = ConnectionMode.offline;
+    }
     notifyListeners();
   }
 
@@ -210,9 +250,13 @@ class AppState extends ChangeNotifier {
     await _store.write(updated);
     // Always rebuild the client: saving settings is the user's "try
     // again with these" gesture, even when the URL text is unchanged.
-    client.close();
-    client = _clientFactory(updated.baseUrl);
-    client.authToken = updated.deviceToken; // M21: pairing state follows
+    if (connectionResolver != null) {
+      await resolveConnection(); // re-pick LAN/relay with the new settings
+    } else {
+      client.close();
+      client = _clientFactory(updated.baseUrl);
+      client.authToken = updated.deviceToken; // M21: pairing state follows
+    }
     if (intervalChanged && _timer != null) startPolling();
     notifyListeners();
     // Saving settings always re-checks the connection — that is the

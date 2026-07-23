@@ -52,15 +52,17 @@ class TestNavigation:
         assert normalized == [
             "Planning", "Timeline", "Inbox", "Dashboard", "Goals",
             "Projects", "Events", "Resources", "Knowledge", "Learning",
-            "History", "Backups", "Logs", "Notifications", "Mobile",
-            "Settings", "Refresh",
+            "History", "Backups", "Logs", "Notifications", "Intelligence",
+            "Networking", "Mobile", "Settings", "Refresh",
         ]
-        for row in range(16):
+        page_count = len(normalized) - 1  # every entry except Refresh
+        for row in range(page_count):
             window.navigation.setCurrentRow(row)
             assert window.pages.currentIndex() == row
-        # The trailing Refresh entry refreshes and bounces back.
-        window.navigation.setCurrentRow(16)
-        assert window.pages.currentIndex() == 15
+        # The trailing Refresh entry refreshes and bounces back to the
+        # page that was open (the last one selected above).
+        window.navigation.setCurrentRow(page_count)
+        assert window.pages.currentIndex() == page_count - 1
 
     def test_planning_is_the_startup_page(self, window):
         assert window.pages.currentIndex() == 0

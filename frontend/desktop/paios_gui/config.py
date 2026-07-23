@@ -22,6 +22,9 @@ class GuiConfig:
     #: None means logging to file is off and the Logs page shows its
     #: empty state.
     log_dir: str | None = None
+    #: Active UI theme ("dark" | "light"); switchable at runtime from
+    #: Settings and persisted to the gui-settings.json file.
+    theme: str = "dark"
 
     def clamp_refresh(self, seconds: int) -> int:
         return max(MIN_REFRESH_SECONDS, min(MAX_REFRESH_SECONDS, seconds))

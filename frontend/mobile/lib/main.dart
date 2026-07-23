@@ -26,6 +26,7 @@ import 'screens/settings_screen.dart';
 import 'screens/study_screen.dart';
 import 'screens/timeline_screen.dart';
 import 'services/app_state.dart';
+import 'services/connection_manager.dart';
 import 'services/settings_service.dart';
 import 'theme/app_theme.dart';
 import 'widgets/offline_banner.dart';
@@ -33,7 +34,19 @@ import 'widgets/offline_banner.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final store = await SettingsService.load();
-  runApp(PaiosApp(state: AppState(store)));
+  runApp(PaiosApp(
+    state: AppState(
+      store,
+      // Production: auto-select LAN -> Relay -> Offline with no user
+      // action. Tests inject a client factory and leave this off.
+      connectionResolver: (settings) => ConnectionManager(
+        lanUrl: settings.baseUrl,
+        relayUrl: settings.relayUrl.isEmpty ? null : settings.relayUrl,
+        account: settings.account,
+        deviceToken: settings.deviceToken,
+      ).resolve(),
+    ),
+  ));
 }
 
 class PaiosApp extends StatelessWidget {
@@ -172,6 +185,31 @@ class _HomeShellState extends State<HomeShell> {
               visible: state.online == false,
               retrySeconds: state.settings.refreshSeconds,
             ),
+            if (state.online == true &&
+                state.connectionMode == ConnectionMode.remote)
+              Container(
+                width: double.infinity,
+                color: Theme.of(context).colorScheme.primaryContainer,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.cloud_done_outlined,
+                        size: 15,
+                        color:
+                            Theme.of(context).colorScheme.onPrimaryContainer),
+                    const SizedBox(width: 6),
+                    Text(
+                      ConnectionMode.remote.label,
+                      style: TextStyle(
+                        color:
+                            Theme.of(context).colorScheme.onPrimaryContainer,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             Expanded(
               child: AnimatedSwitcher(
                 duration: const Duration(milliseconds: 250),

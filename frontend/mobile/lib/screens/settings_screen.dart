@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
 import '../services/app_state.dart';
-import '../services/settings_service.dart';
+import '../services/pairing_payload.dart';
 
 const List<int> refreshChoices = [2, 5, 10, 30, 60];
 
@@ -21,6 +21,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _urlController;
   final TextEditingController _codeController = TextEditingController();
   final TextEditingController _deviceNameController = TextEditingController();
+  late final TextEditingController _relayController;
+  late final TextEditingController _pasteController;
   bool _pairing = false;
 
   @override
@@ -29,6 +31,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _urlController =
         TextEditingController(text: widget.state.settings.baseUrl);
     _deviceNameController.text = widget.state.settings.deviceName;
+    _relayController =
+        TextEditingController(text: widget.state.settings.relayUrl);
+    _pasteController = TextEditingController();
   }
 
   @override
@@ -36,19 +41,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _urlController.dispose();
     _codeController.dispose();
     _deviceNameController.dispose();
+    _relayController.dispose();
+    _pasteController.dispose();
     super.dispose();
   }
 
   Future<void> _save({String? url, int? refresh, bool? dark}) async {
-    final current = widget.state.settings;
-    await widget.state.updateSettings(Settings(
-      baseUrl: url ?? current.baseUrl,
-      refreshSeconds: refresh ?? current.refreshSeconds,
-      darkTheme: dark ?? current.darkTheme,
-      deviceToken: current.deviceToken,
-      deviceName: current.deviceName,
+    await widget.state.updateSettings(widget.state.settings.copyWith(
+      baseUrl: url,
+      refreshSeconds: refresh,
+      darkTheme: dark,
     ));
     if (mounted) setState(() {});
+  }
+
+  Future<void> _saveRemote() async {
+    await widget.state.updateSettings(
+        widget.state.settings.copyWith(relayUrl: _relayController.text.trim()));
+    if (mounted) setState(() {});
+    _notify(_relayController.text.trim().isEmpty
+        ? 'Remote access off — the phone uses Wi-Fi only.'
+        : 'Remote access saved — the phone can reach PAIOS anywhere.');
+  }
+
+  /// Reads a pasted/scanned `paios://pair` payload (or a plain address)
+  /// and fills the server + relay fields so the user does not type them.
+  void _applyPastedPayload() {
+    final payload = PairingPayload.parse(_pasteController.text);
+    if (!payload.isUsable) {
+      _notify("That code wasn't recognised — check it and try again.");
+      return;
+    }
+    setState(() {
+      if (payload.hasLan) _urlController.text = payload.lanUrl!;
+      if (payload.hasRelay) _relayController.text = payload.relayUrl!;
+    });
+    widget.state.updateSettings(widget.state.settings.copyWith(
+      baseUrl: payload.hasLan ? payload.lanUrl : null,
+      relayUrl: payload.hasRelay ? payload.relayUrl : null,
+      account: payload.account,
+    ));
+    _pasteController.clear();
+    _notify('Connection details filled in — now enter the pairing code.');
   }
 
   void _notify(String message) {
@@ -78,11 +112,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _notify('Pairing failed: the server sent no token.');
         return;
       }
-      final current = widget.state.settings;
-      await widget.state.updateSettings(Settings(
-        baseUrl: current.baseUrl,
-        refreshSeconds: current.refreshSeconds,
-        darkTheme: current.darkTheme,
+      await widget.state.updateSettings(widget.state.settings.copyWith(
         deviceToken: token,
         deviceName: deviceName,
       ));
@@ -116,14 +146,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _forgetPairing() async {
-    final current = widget.state.settings;
-    await widget.state.updateSettings(Settings(
-      baseUrl: current.baseUrl,
-      refreshSeconds: current.refreshSeconds,
-      darkTheme: current.darkTheme,
-      deviceToken: null,
-      deviceName: '',
-    ));
+    await widget.state.updateSettings(widget.state.settings
+        .copyWith(clearToken: true, deviceName: ''));
     if (mounted) setState(() {});
     _notify('Pairing forgotten — journal, study and assistant need'
         ' a new code.');
@@ -242,6 +266,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
         ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Use PAIOS anywhere (optional)'),
+                const SizedBox(height: 4),
+                Text(
+                  'Paste the connection code from the desktop to fill these'
+                  ' in automatically, or enter the relay address your'
+                  ' desktop is set up with. Then PAIOS works on mobile data'
+                  ' too, not just this Wi-Fi.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: Theme.of(context).colorScheme.outline),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _pasteController,
+                        decoration: const InputDecoration(
+                          labelText: 'Paste connection code',
+                          hintText: 'paios://pair?…  (or an address)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    OutlinedButton(
+                      onPressed: _applyPastedPayload,
+                      child: const Text('Use'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _relayController,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: 'Relay address (optional)',
+                    hintText: 'https://relay.example.com',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: FilledButton(
+                    onPressed: _saveRemote,
+                    child: const Text('Save remote access'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
         ListTile(
           title: const Text('Refresh interval'),
           trailing: DropdownButton<int>(
@@ -266,10 +348,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         const ListTile(
           title: Text('About'),
           subtitle: Text(
-            'PAIOS Mobile Companion 1.0.0 (Milestone 15)\n'
-            'A REST-only remote client. The laptop remains the operating '
-            'system; the phone never schedules, learns, reasons, or stores '
-            'domain state.',
+            'PAIOS companion 1.1.0\n'
+            'Your PAIOS lives on your computer. This app is a window into '
+            'it — from your Wi-Fi or anywhere through secure remote access.',
           ),
         ),
       ],

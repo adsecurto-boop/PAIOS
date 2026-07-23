@@ -429,3 +429,46 @@ class TestOllamaSupport:
         result = ollama_support.start_pull("qwen2.5:7b")
         assert result["started"] is False
         assert "ollama.com" in result["reason"]
+
+
+class TestModelInfo:
+    def test_reports_context_size_and_quantization(self):
+        def fake(url, payload, timeout):
+            assert url.endswith("/api/show")
+            assert payload == {"name": "qwen2.5:7b"}
+            return {
+                "details": {
+                    "parameter_size": "7.6B",
+                    "quantization_level": "Q4_K_M",
+                    "family": "qwen2",
+                },
+                "model_info": {"qwen2.context_length": 32768},
+            }
+
+        info = ollama_support.model_info("qwen2.5:7b", transport=fake)
+        assert info["available"] is True
+        assert info["context_length"] == 32768
+        assert info["parameter_size"] == "7.6B"
+        assert info["quantization"] == "Q4_K_M"
+
+    def test_unavailable_when_server_is_down(self):
+        def dead(url, payload, timeout):
+            raise OSError("connection refused")
+
+        assert ollama_support.model_info("x", transport=dead) == {
+            "available": False
+        }
+
+    def test_show_endpoint_returns_model_info(
+        self, offline_router, monkeypatch
+    ):
+        monkeypatch.setattr(
+            ollama_support,
+            "model_info",
+            lambda model: {"available": True, "context_length": 8192},
+        )
+        payload = ok(
+            offline_router, "POST", "/assistant/ollama/show",
+            {"model": "llama3.1:8b"},
+        )
+        assert payload["context_length"] == 8192

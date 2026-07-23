@@ -38,6 +38,7 @@ from paios.api import (
 )
 from paios.api.errors import ApiError, translate
 from paios.planning.service import PlanningService
+import paios.system.network as network
 from paios.system.backup import BackupManager
 
 #: Fallback owner when the store holds no users (the CLI convention).
@@ -66,6 +67,13 @@ class ApiRouter:
         assistant_reason: str | None = None,
         mobile=None,
         ai_dir=None,
+        network_dir=None,
+        bound_host=None,
+        bound_port=None,
+        discovery=None,
+        relay_status=None,
+        relay_reload=None,
+        relay_authorize=None,
     ) -> None:
         self._app = application
         self._planning = planning
@@ -86,6 +94,22 @@ class ApiRouter:
         self._mobile = mobile
         #: Where ai-settings.json lives (None -> settings routes 503).
         self._ai_dir = ai_dir
+        #: Networking page support (M21). ``network_dir`` is where
+        #: network-settings.json lives; the bound host/port are what the
+        #: running server was told to listen on (None -> /system routes
+        #: 503, the same discipline as the other optional collaborators).
+        self._network_dir = network_dir
+        self._bound_host = bound_host
+        self._bound_port = bound_port
+        #: M22: the mDNS advertiser (or None) — its ``running`` flag and
+        #: ``info`` back the discovery status the Networking page shows.
+        self._discovery = discovery
+        #: M23: remote-access hooks owned by the server — read status,
+        #: apply changed settings (reconnect), and authorize a paired
+        #: phone with the relay. None when the server did not wire them.
+        self._relay_status = relay_status
+        self._relay_reload = relay_reload
+        self._relay_authorize = relay_authorize
         # Per-request transport context. The HTTP server is deliberately
         # single-threaded (see server.py), so stashing per request is
         # safe; tests calling handle() directly are sequential too.
@@ -485,6 +509,12 @@ class ApiRouter:
         model = schemas.require_string(body, "model")
         return 200, ollama_support.remove_model(model)
 
+    def _post_assistant_ollama_show(self, params, body):
+        """Model details (context length, parameter size, quantization).
+        POST because model tags carry ':' and '/' that break path parts."""
+        model = schemas.require_string(body, "model")
+        return 200, ollama_support.model_info(model)
+
     def _get_assistant_config(self, params, body):
         ai_dir = self._require_ai_dir()
         stored = ai_settings.load(ai_dir)
@@ -746,7 +776,19 @@ class ApiRouter:
             )
         except mobile_support.MobileAuthError as error:
             raise ApiError(401, str(error)) from error
-        return 201, {"device_id": device_id, "token": token}
+        # M23: if remote access is on, authorize this phone with the relay
+        # so it works from anywhere, not just the LAN. Best-effort — the
+        # relay hashes the same token, so we register its SHA-256.
+        remote = False
+        if self._relay_authorize is not None:
+            import hashlib
+
+            remote = self._relay_authorize(
+                hashlib.sha256(token.encode("utf-8")).hexdigest()
+            )
+        return 201, {
+            "device_id": device_id, "token": token, "remote_enabled": remote
+        }
 
     def _post_mobile_auth(self, params, body):
         token = schemas.require_string(body, "token")
@@ -904,6 +946,134 @@ class ApiRouter:
                 }
             except assistant_support.FALLBACK_ERRORS:
                 pass
+        return 200, payload
+
+    # --- networking (M21: the Networking page, no terminal required) --------
+    # Facts are readable by anyone the server answers; changing the
+    # access mode or the firewall is desktop-only (loopback), the same
+    # rule that protects pairing administration.
+
+    def _require_network(self):
+        if self._network_dir is None or self._bound_port is None:
+            raise ApiError(503, "Networking services are not composed")
+        return self._network_dir
+
+    def _network_report(self) -> dict:
+        report = network.report(
+            self._require_network(),
+            self._bound_host or network.LOOPBACK_HOST,
+            int(self._bound_port),
+        )
+        report["discovering"] = bool(
+            self._discovery is not None and self._discovery.running
+        )
+        return report
+
+    def _get_system_network(self, params, body):
+        return 200, self._network_report()
+
+    def _get_system_discovery(self, params, body):
+        """Whether the desktop is advertising itself over mDNS, and the
+        service name a phone would see while browsing."""
+        active = self._discovery is not None and self._discovery.running
+        payload = {"advertising": bool(active)}
+        if active:
+            info = self._discovery.info
+            payload.update(
+                {
+                    "instance": info.instance,
+                    "service": "_paios._tcp.local",
+                    "port": info.port,
+                    "address": info.address,
+                }
+            )
+        return 200, payload
+
+    def _put_system_network(self, params, body):
+        self._require_network()
+        self._require_loopback()
+        mode = schemas.require_string(body, "mode").strip().lower()
+        if mode not in ("local", "lan"):
+            raise ApiError(
+                400, "Field 'mode' must be 'local' or 'lan'"
+            )
+        network.save_settings(self._network_dir, mode)
+        report = self._network_report()
+        report["note"] = (
+            "Local Network access is on. Restart the PAIOS server to bind"
+            " it — the Networking page can do that, no terminal needed."
+            if mode == "lan"
+            else "Local Only mode saved. Restart the server to apply; the"
+            " API will then refuse connections from other devices."
+        )
+        return 200, report
+
+    def _post_system_network_firewall(self, params, body):
+        self._require_network()
+        self._require_loopback()
+        return 200, network.add_firewall_rule(int(self._bound_port))
+
+    def _get_system_server(self, params, body):
+        """The server answering this IS proof it is running; the payload
+        carries the address and access mode the Networking page shows."""
+        import os
+
+        self._require_network()
+        settings = network.load_settings(self._network_dir)
+        ip = network.local_ip()
+        return 200, {
+            "running": True,
+            "pid": os.getpid(),
+            "host": self._bound_host or network.LOOPBACK_HOST,
+            "port": int(self._bound_port),
+            "mode": settings["mode"],
+            "server_time": self._app.current_time().isoformat(),
+            **network.urls(ip, int(self._bound_port)),
+        }
+
+    # --- remote access (M23: the Networking page's Remote section) ----------
+
+    def _require_relay(self):
+        if self._relay_status is None:
+            raise ApiError(503, "Remote access is not composed")
+
+    def _get_system_relay(self, params, body):
+        self._require_relay()
+        return 200, self._relay_status()
+
+    def _put_system_relay(self, params, body):
+        """Persist the relay settings and reconnect live — no restart.
+        Desktop-only, like the other Networking mutations."""
+        self._require_relay()
+        self._require_loopback()
+        from paios.api import relay_settings
+
+        data_dir = self._require_network()
+        updates = {}
+        if "enabled" in body:
+            updates["enabled"] = bool(body.get("enabled"))
+        relay_url = schemas.optional_string(body, "relay_url")
+        if relay_url is not None:
+            updates["relay_url"] = relay_url.strip().rstrip("/")
+        account = schemas.optional_string(body, "account")
+        if account is not None:
+            updates["account"] = account.strip() or "default"
+        relay_settings.save(data_dir, updates)
+        key = schemas.optional_string(body, "account_key")
+        warning = None
+        if key:
+            if not relay_settings.store_account_key(data_dir, key):
+                warning = (
+                    "Secure key storage is unavailable on this platform —"
+                    " set the "
+                    + relay_settings.KEY_VARIABLE
+                    + " environment variable instead. The key was NOT"
+                    " stored."
+                )
+        self._relay_reload()
+        payload = dict(self._relay_status())
+        if warning:
+            payload["warning"] = warning
         return 200, payload
 
     # --- backups (M20: wraps the existing system BackupManager) ----------------
@@ -1278,6 +1448,11 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
         ("assistant", "ollama", "remove"),
         ApiRouter._post_assistant_ollama_remove,
     ),
+    (
+        "POST",
+        ("assistant", "ollama", "show"),
+        ApiRouter._post_assistant_ollama_show,
+    ),
     ("GET", ("assistant", "config"), ApiRouter._get_assistant_config),
     ("PUT", ("assistant", "config"), ApiRouter._put_assistant_config),
     ("POST", ("assistant", "test"), ApiRouter._post_assistant_test),
@@ -1329,4 +1504,16 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("GET", ("backups",), ApiRouter._get_backups),
     ("POST", ("backups",), ApiRouter._post_backups),
     ("POST", ("backups", "restore"), ApiRouter._post_backups_restore),
+    # --- Milestone 21 additive routes: the Networking page -----------------
+    ("GET", ("system", "network"), ApiRouter._get_system_network),
+    ("PUT", ("system", "network"), ApiRouter._put_system_network),
+    (
+        "POST",
+        ("system", "network", "firewall"),
+        ApiRouter._post_system_network_firewall,
+    ),
+    ("GET", ("system", "server"), ApiRouter._get_system_server),
+    ("GET", ("system", "discovery"), ApiRouter._get_system_discovery),
+    ("GET", ("system", "relay"), ApiRouter._get_system_relay),
+    ("PUT", ("system", "relay"), ApiRouter._put_system_relay),
 )

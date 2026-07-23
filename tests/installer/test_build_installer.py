@@ -31,13 +31,16 @@ class TestCommandConstruction:
         assert command[command.index("--name") + 1] == "PAIOS"
         assert command[-1].endswith("__main__.py")
         assert "paios_launcher" in command[-1]
-        # The whole product is collected: backend, GUI, launcher.
+        # The whole product is collected: backend, GUI, launcher, plus
+        # the GUI's QR library (M21) so the frozen product needs no pip.
         collected = [
             command[i + 1]
             for i, part in enumerate(command)
             if part == "--collect-submodules"
         ]
-        assert collected == ["paios", "paios_gui", "paios_launcher"]
+        assert collected == [
+            "paios", "paios_gui", "paios_launcher", "segno"
+        ]
         paths = [
             command[i + 1]
             for i, part in enumerate(command)
@@ -148,7 +151,7 @@ class TestReleaseArtifacts:
 
     def test_project_version_reads_pyproject(self):
         version = build_installer.project_version()
-        assert version == "2.2.0"
+        assert version == "2.4.0"
 
     def test_checksums_file_in_sha256sum_format(self, tmp_path):
         artifact = tmp_path / "PAIOSSetup.exe"

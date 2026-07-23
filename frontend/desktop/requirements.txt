@@ -1,2 +1,5 @@
 # Desktop GUI tier only — the backend remains stdlib-only.
 PySide6-Essentials==6.9.1
+# QR codes for the pairing / networking pages (M21). Pure-Python,
+# zero-dependency; bundled into the frozen product by PyInstaller.
+segno==1.6.1

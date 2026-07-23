@@ -472,10 +472,10 @@ class _ThemePage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
         self.setTitle("Theme")
-        self.setSubTitle("Dark is the shipped default.")
+        self.setSubTitle("Dark is the shipped default; light is available too.")
         form = QFormLayout(self)
         self.theme_box = QComboBox()
-        self.theme_box.addItems(["dark"])
+        self.theme_box.addItems(["dark", "light"])
         form.addRow("Theme", self.theme_box)
 
 

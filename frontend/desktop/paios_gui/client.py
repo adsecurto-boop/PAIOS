@@ -312,6 +312,17 @@ class ApiClient:
             "POST", "/assistant/ollama/pull", {"model": model}
         )
 
+    def assistant_ollama_remove(self, model: str) -> dict:
+        return self._request(
+            "POST", "/assistant/ollama/remove", {"model": model}
+        )
+
+    def assistant_ollama_show(self, model: str) -> dict:
+        """Context length, parameter size and quantization for a model."""
+        return self._request(
+            "POST", "/assistant/ollama/show", {"model": model}
+        )
+
     def assistant_config(self) -> dict:
         return self._request("GET", "/assistant/config")
 
@@ -330,6 +341,45 @@ class ApiClient:
 
     def assistant_test(self) -> dict:
         return self._request("POST", "/assistant/test", {})
+
+    # --- networking (M21: the Networking page) ------------------------------
+
+    def system_network(self) -> dict:
+        """Current IP, port, mode, firewall and Wi-Fi — one call."""
+        return self._request("GET", "/system/network")
+
+    def set_network_mode(self, mode: str) -> dict:
+        """Switch between 'local' (loopback only) and 'lan' (reachable
+        by paired phones). Loopback-only on the server side."""
+        return self._request("PUT", "/system/network", {"mode": mode})
+
+    def open_firewall(self) -> dict:
+        return self._request("POST", "/system/network/firewall", {})
+
+    def system_server(self) -> dict:
+        return self._request("GET", "/system/server")
+
+    def system_relay(self) -> dict:
+        """Remote-access (relay) settings + live connection status."""
+        return self._request("GET", "/system/relay")
+
+    def set_relay_config(
+        self,
+        enabled: bool | None = None,
+        relay_url: str | None = None,
+        account: str | None = None,
+        account_key: str | None = None,
+    ) -> dict:
+        body: dict = {}
+        if enabled is not None:
+            body["enabled"] = enabled
+        if relay_url is not None:
+            body["relay_url"] = relay_url
+        if account is not None:
+            body["account"] = account
+        if account_key:
+            body["account_key"] = account_key
+        return self._request("PUT", "/system/relay", body)
 
     def mobile_pairing_start(self) -> dict:
         """Desktop-side: a 6-digit code the phone enters to pair."""

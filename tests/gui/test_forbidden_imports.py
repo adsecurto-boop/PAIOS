@@ -18,7 +18,10 @@ from pathlib import Path
 
 import paios_gui
 
-ALLOWED_TOP_LEVEL = {"PySide6", "paios_gui"}
+# PySide6 is the widget toolkit; segno (M21) encodes the pairing /
+# networking QR codes — both are GUI-tier third-party dependencies,
+# bundled into the frozen product, never reached by the backend.
+ALLOWED_TOP_LEVEL = {"PySide6", "paios_gui", "segno"}
 #: File/persistence modules the presentation layer must never touch.
 FORBIDDEN_STDLIB = {"pathlib", "sqlite3", "shelve", "pickle", "dbm"}
 #: The M20-sanctioned file surfaces (see module docstring) — pathlib

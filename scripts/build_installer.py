@@ -106,6 +106,9 @@ def launcher_command(output_dir: Path, work_dir: Path) -> list[str]:
         "--collect-submodules", "paios",
         "--collect-submodules", "paios_gui",
         "--collect-submodules", "paios_launcher",
+        # M21: the GUI's QR library — bundled so the frozen product needs
+        # no pip (segno is pure-Python with no dependencies of its own).
+        "--collect-submodules", "segno",
         *_decorations(work_dir),
         str(REPO_ROOT / "launcher" / "paios_launcher" / "__main__.py"),
     ]

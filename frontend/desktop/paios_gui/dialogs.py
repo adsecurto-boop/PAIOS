@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
@@ -312,6 +313,48 @@ class ConvertInboxDialog(_FormDialog):
             "title": self.title_edit.text().strip() or None,
             "suggested_time": self.when.iso(),
         }
+
+
+class ShortcutsDialog(QDialog):
+    """A discoverable reference of every keyboard shortcut (F1)."""
+
+    SHORTCUTS = (
+        ("F5  /  Ctrl+R", "Refresh the current page"),
+        ("Ctrl+1 … Ctrl+9", "Jump to a page by position"),
+        ("Ctrl+N", "New event"),
+        ("Ctrl+I", "Capture to the Inbox"),
+        ("Ctrl+P", "Open Planning"),
+        ("Ctrl+F", "Search the current table"),
+        ("Ctrl+,", "Open Settings"),
+        ("F1", "Show this shortcuts list"),
+        ("Ctrl+Q", "Quit PAIOS"),
+    )
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Keyboard shortcuts")
+        self.setMinimumWidth(420)
+        layout = QVBoxLayout(self)
+        heading = QLabel("Keyboard shortcuts")
+        heading.setObjectName("cardTitle")
+        layout.addWidget(heading)
+        table = QTableWidget(len(self.SHORTCUTS), 2)
+        table.setHorizontalHeaderLabels(["Shortcut", "Action"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.horizontalHeader().setStretchLastSection(True)
+        for row, (keys, action) in enumerate(self.SHORTCUTS):
+            table.setItem(row, 0, QTableWidgetItem(keys))
+            table.setItem(row, 1, QTableWidgetItem(action))
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        buttons.button(
+            QDialogButtonBox.StandardButton.Close
+        ).clicked.connect(self.accept)
+        layout.addWidget(buttons)
 
 
 def confirm(parent, title: str, question: str) -> bool:

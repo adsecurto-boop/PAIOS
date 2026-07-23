@@ -222,6 +222,7 @@ def main(
 
     if arguments[0] == "serve":
         from paios.api import ApiConfig, ApiServer
+        from paios.system import network
 
         setup_logging(system.log_dir, "api")
         try:
@@ -238,9 +239,14 @@ def main(
                 application.components.kernel.event_bus,
                 started_at=application.components.clock.now(),
             )
+            # M21: the persisted Local/LAN choice (Networking page) wins
+            # over the configured host, so the toggle needs no terminal.
+            bind_host = network.resolve_bind_host(
+                str(config.data_dir), system.server_host
+            )
             server = ApiServer(
                 ApiConfig(
-                    host=system.server_host,
+                    host=bind_host,
                     port=port,
                     data_dir=str(config.data_dir),
                 ),
@@ -248,7 +254,7 @@ def main(
             )
             server.start()
             out.write(
-                f"PAIOS API listening on http://{system.server_host}:"
+                f"PAIOS API listening on http://{bind_host}:"
                 f"{server.port}  (Ctrl+C to stop)\n"
             )
             out.flush()

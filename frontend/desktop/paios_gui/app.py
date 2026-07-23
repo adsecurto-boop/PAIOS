@@ -19,7 +19,7 @@ from paios_gui.client import ApiClient
 from paios_gui.config import GuiConfig
 from paios_gui.first_run_wizard import FirstRunWizard, should_show_wizard
 from paios_gui.main_window import MainWindow
-from paios_gui.theme import apply_dark_theme
+from paios_gui.theme import apply_theme
 
 
 def parse_arguments(argv: list[str], settings: dict) -> argparse.Namespace:
@@ -62,6 +62,7 @@ def build_config(argv: list[str], settings: dict | None = None) -> GuiConfig:
     config = GuiConfig(base_url=arguments.url)
     config.refresh_seconds = config.clamp_refresh(arguments.refresh)
     config.log_dir = arguments.log_dir
+    config.theme = stored.get("theme", "dark")
     if arguments.log_dir:
         _setup_logging(arguments.log_dir)
     return config
@@ -98,11 +99,12 @@ def main(argv: list[str] | None = None) -> int:
     config = GuiConfig(base_url=arguments.url)
     config.refresh_seconds = config.clamp_refresh(arguments.refresh)
     config.log_dir = arguments.log_dir
+    config.theme = settings.get("theme", "dark")
     if arguments.log_dir:
         _setup_logging(arguments.log_dir)
 
     app = QApplication.instance() or QApplication([])
-    apply_dark_theme(app)
+    apply_theme(app, settings.get("theme", "dark"))
 
     if should_show_wizard(settings, no_wizard=arguments.no_wizard):
         wizard = FirstRunWizard(
@@ -116,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
             config.refresh_seconds = config.clamp_refresh(
                 chosen["refresh_seconds"]
             )
+            apply_theme(app, chosen.get("theme", "dark"))
         else:
             # Declined: remember that, so the wizard stays a one-time
             # greeting rather than a recurring gate.

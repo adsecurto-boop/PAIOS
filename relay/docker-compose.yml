@@ -1,0 +1,35 @@
+# PAIOS relay — one command to run it anywhere:
+#
+#     docker compose up -d
+#
+# Set your own secrets first (copy .env.example to .env and edit), or
+# export the variables in your shell. Deploy this on Oracle Cloud, a
+# Raspberry Pi, DigitalOcean, Hetzner, AWS or Azure without touching any
+# PAIOS code.
+
+services:
+  relay:
+    build: .
+    image: paios-relay:latest
+    restart: unless-stopped
+    ports:
+      - "${PAIOS_RELAY_PORT:-8770}:8770"
+    environment:
+      # Required — generate strong random values (see README).
+      PAIOS_RELAY_SECRET: "${PAIOS_RELAY_SECRET:?set a random secret}"
+      PAIOS_RELAY_ACCOUNT_KEY: "${PAIOS_RELAY_ACCOUNT_KEY:?set a random key}"
+      # Optional.
+      PAIOS_RELAY_ACCOUNT: "${PAIOS_RELAY_ACCOUNT:-default}"
+      PAIOS_RELAY_HOST: "0.0.0.0"
+      PAIOS_RELAY_PORT: "8770"
+      # For direct HTTPS, mount certs and point these at them; otherwise
+      # terminate TLS at a reverse proxy (Caddy/nginx/Traefik).
+      PAIOS_RELAY_TLS_CERT: "${PAIOS_RELAY_TLS_CERT:-}"
+      PAIOS_RELAY_TLS_KEY: "${PAIOS_RELAY_TLS_KEY:-}"
+    # volumes:
+    #   - ./certs:/certs:ro   # uncomment to serve HTTPS directly
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8770/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

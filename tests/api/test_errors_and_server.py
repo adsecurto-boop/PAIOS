@@ -186,6 +186,13 @@ class TestDelegation:
             "_assistant_reason",
             "_mobile",
             "_ai_dir",
+            "_network_dir",
+            "_bound_host",
+            "_bound_port",
+            "_discovery",
+            "_relay_status",
+            "_relay_reload",
+            "_relay_authorize",
             "_request_headers",
             "_request_client",
         }
@@ -245,6 +252,13 @@ ALLOWED_PAIOS_PREFIXES = (
     # Intelligence layer (additive): hardware detection feeds the AI
     # setup surface (model recommendations) — read-only probes only.
     "paios.system.hardware",
+    # M21 (additive): the Networking page's facts + persisted access
+    # mode + firewall helper — read-only probes and one settings file.
+    "paios.system.network",
+    # M22 (additive): the mDNS advertiser started in Local Network mode.
+    "paios.system.discovery",
+    # M23 (additive): the outbound relay connector (remote access).
+    "paios.system.relay_client",
 )
 
 
