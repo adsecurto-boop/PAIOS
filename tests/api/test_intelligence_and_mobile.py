@@ -7,7 +7,9 @@ the null adapter, deterministic without one), and the /mobile namespace
 idempotency). No network anywhere.
 """
 
+import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,6 +100,44 @@ class TestModelRecommendation:
         profile = hardware.detect()
         assert profile.cpu_cores >= 1
         assert profile.ram_gb >= 0.0
+
+    def test_gpu_detection_is_cached_until_forced_refresh(self):
+        calls = []
+
+        def fake_runner(*args, **kwargs):
+            calls.append((args, kwargs))
+            return SimpleNamespace(
+                returncode=0,
+                stdout="NVIDIA RTX 4090,24576\n",
+                stderr="",
+            )
+
+        hardware._reset_gpu_cache()
+        first = hardware.detect_gpu(runner=fake_runner)
+        second = hardware.detect_gpu(runner=fake_runner)
+        third = hardware.detect_gpu(runner=fake_runner, force_refresh=True)
+
+        assert first == ("NVIDIA RTX 4090", 24.0)
+        assert second == first
+        assert third == first
+        assert len(calls) == 2
+
+    @pytest.mark.skipif(
+        subprocess.os.name != "nt",
+        reason="Windows-only subprocess hiding behavior",
+    )
+    def test_windows_gpu_probe_uses_hidden_subprocess_flags(self):
+        seen = {}
+
+        def fake_runner(*args, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        hardware._reset_gpu_cache()
+        hardware.detect_gpu(runner=fake_runner, force_refresh=True)
+
+        assert seen["creationflags"] & subprocess.CREATE_NO_WINDOW
+        assert seen["startupinfo"].wShowWindow == subprocess.SW_HIDE
 
 
 # --- AI settings + config endpoint ------------------------------------------

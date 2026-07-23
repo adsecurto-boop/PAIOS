@@ -108,11 +108,19 @@ def remove_model(model: str, runner=None) -> dict:
     if not cli_available():
         return {"removed": False, "reason": "ollama CLI not installed"}
     run = runner if runner is not None else subprocess.run
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": 60,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        kwargs["startupinfo"] = startupinfo
     try:
-        completed = run(
-            ["ollama", "rm", model],
-            capture_output=True, text=True, timeout=60,
-        )
+        completed = run(["ollama", "rm", model], **kwargs)
     except (OSError, subprocess.TimeoutExpired) as error:
         return {"removed": False, "reason": str(error)}
     if completed.returncode != 0:

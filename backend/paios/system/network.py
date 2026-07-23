@@ -125,13 +125,19 @@ def _run(runner, command: list[str]):
     """Run a system query; return (returncode, stdout) or (None, "")
     when the tool is absent or times out."""
     run = runner if runner is not None else subprocess.run
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": _QUERY_TIMEOUT_SECONDS,
+    }
+    if subprocess.os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        kwargs["startupinfo"] = startupinfo
     try:
-        completed = run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=_QUERY_TIMEOUT_SECONDS,
-        )
+        completed = run(command, **kwargs)
     except (OSError, subprocess.TimeoutExpired):
         return None, ""
     return completed.returncode, completed.stdout or ""

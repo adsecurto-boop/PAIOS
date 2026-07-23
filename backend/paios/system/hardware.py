@@ -10,6 +10,7 @@ import ctypes
 import os
 import platform
 import subprocess
+import time
 from dataclasses import asdict, dataclass
 
 
@@ -23,6 +24,10 @@ class HardwareProfile:
 
     def as_dict(self) -> dict:
         return asdict(self)
+
+
+_GPU_CACHE: dict[str, tuple[tuple[str | None, float | None], float]] = {}
+_GPU_CACHE_TTL_SECONDS = 30 * 60
 
 
 @dataclass(frozen=True)
@@ -84,27 +89,70 @@ def detect_ram_gb() -> float:
         return 0.0
 
 
-def detect_gpu() -> tuple[str | None, float | None]:
-    """(gpu name, VRAM GiB) via nvidia-smi; (None, None) without one."""
+def _run_hidden_command(command: list[str], *, timeout: float = 5.0, runner=None):
+    run = runner if runner is not None else subprocess.run
+    kwargs = {
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startupinfo.wShowWindow = subprocess.SW_HIDE
+        kwargs["startupinfo"] = startupinfo
     try:
-        completed = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=name,memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True, text=True, timeout=5,
-        )
+        return run(command, **kwargs)
     except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _reset_gpu_cache() -> None:
+    _GPU_CACHE.clear()
+
+
+def detect_gpu(
+    runner=None,
+    *,
+    force_refresh: bool = False,
+) -> tuple[str | None, float | None]:
+    """(gpu name, VRAM GiB) via nvidia-smi; cached and hidden."""
+    now = time.monotonic()
+    cached = _GPU_CACHE.get("gpu")
+    if not force_refresh and cached is not None:
+        value, stamp = cached
+        if now - stamp <= _GPU_CACHE_TTL_SECONDS:
+            return value
+
+    result = _run_hidden_command(
+        [
+            "nvidia-smi",
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ],
+        runner=runner,
+    )
+    if result is None:
+        if cached is not None:
+            return cached[0]
         return None, None
-    if completed.returncode != 0 or not completed.stdout.strip():
+    if result.returncode != 0 or not result.stdout.strip():
+        if cached is not None:
+            return cached[0]
         return None, None
-    first = completed.stdout.strip().splitlines()[0]
+
+    first = result.stdout.strip().splitlines()[0]
     name, _, vram_mb = first.rpartition(",")
     try:
-        return name.strip() or None, round(float(vram_mb.strip()) / 1024, 1)
+        value = (
+            name.strip() or None,
+            round(float(vram_mb.strip()) / 1024, 1),
+        )
     except ValueError:
-        return first.strip() or None, None
+        value = (first.strip() or None, None)
+    _GPU_CACHE["gpu"] = (value, now)
+    return value
 
 
 def detect() -> HardwareProfile:
