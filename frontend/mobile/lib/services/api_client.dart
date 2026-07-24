@@ -131,19 +131,19 @@ class ApiClient {
               .post(uri, headers: headers, body: jsonEncode(body ?? {}))
               .timeout(wait);
       }
-    } on TimeoutException {
-      _log('<- $method $uri TIMEOUT after ${wait.inSeconds}s');
+    } on TimeoutException catch (error) {
+      _log('<- $method $uri TIMEOUT after ${wait.inSeconds}s [${error.runtimeType}]');
       throw ApiTimeoutException(wait);
     } on SocketException catch (error) {
-      _log('<- $method $uri SOCKET ${error.message}');
+      _log('<- $method $uri SOCKET ${error.message} [${error.runtimeType}]');
       throw ApiUnreachableException(error.message);
     } on http.ClientException catch (error) {
-      _log('<- $method $uri CLIENT ${error.message}');
+      _log('<- $method $uri CLIENT ${error.message} [${error.runtimeType}]');
       throw ApiUnreachableException(error.message);
     }
     final elapsed = DateTime.now().difference(started).inMilliseconds;
-    _log('<- $method $uri ${response.statusCode} in ${elapsed}ms '
-        '(${response.bodyBytes.length} bytes)');
+    _log('<- $method $uri ${response.statusCode} in ${elapsed}ms (${response.bodyBytes.length} bytes)');
+    _log('<- $method $uri RESPONSE BODY: ${response.body}');
     final dynamic decoded;
     try {
       decoded = jsonDecode(utf8.decode(response.bodyBytes));

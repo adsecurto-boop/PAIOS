@@ -117,6 +117,7 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
             _brief(body),
         )
         try:
+            _logger.info("handler entered method=%s path=%s client=%s", method, self.path, context["client_host"])
             if concurrent:
                 status, response = self._router().handle(
                     method, self.path, body, **context
@@ -126,6 +127,7 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
                     status, response = self._router().handle(
                         method, self.path, body, **context
                     )
+            _logger.info("handler exited method=%s path=%s client=%s", method, self.path, context["client_host"])
         except Exception as error:  # transport-level failure only
             _logger.error(
                 "request method=%s path=%s failed in the transport: %s\n%s",

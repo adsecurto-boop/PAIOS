@@ -148,8 +148,14 @@ Future<ConnectionReport> checkConnection(
         'the desktop is up but the model sent nothing within'
             ' ${error.waited.inSeconds}s — it may still be loading'));
   } on ApiResponseException catch (error) {
-    steps.add(CheckStep('AI', CheckStatus.failed,
-        'HTTP ${error.status} (${error.errorType}): ${error.message}'));
+    // Distinguish unpaired device (401) from other backend errors.
+    if (error.status == 401) {
+      steps.add(CheckStep('Pairing', CheckStatus.failed,
+          'This device is not paired — pair this device from PAIOS on the desktop'));
+    } else {
+      steps.add(CheckStep('AI', CheckStatus.failed,
+          'HTTP ${error.status} (${error.errorType}): ${error.message}'));
+    }
   } on ApiUnreachableException catch (error) {
     steps.add(CheckStep('AI', CheckStatus.failed, error.detail));
   }
