@@ -268,4 +268,45 @@ void main() {
     expect(state.client.baseUrl, 'http://10.0.0.7:8765');
     state.dispose();
   });
+
+  testWidgets('Save server acknowledges the press with a notice',
+      (tester) async {
+    // The silent-button bug: pressing Save must show something. With no
+    // server the notice is a "saved but unreachable" line, not silence.
+    final state = await makeState(RequestLog());
+    await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
+    await tester.pumpAndSettle();
+    await openScreen(tester, 'Settings');
+
+    await tester.enterText(
+        find.byType(TextField).first, '10.0.0.9:8765');
+    await tester.tap(find.text('Save server'));
+    await tester.pump(); // busy frame
+    await tester.pumpAndSettle();
+
+    // The typed address was normalized and stored.
+    expect(state.settings.baseUrl, 'http://10.0.0.9:8765');
+    // And the press produced a visible outcome (the card notice, and a
+    // snackbar) — not silence.
+    expect(find.textContaining('Saved'), findsWidgets);
+    state.dispose();
+  });
+
+  testWidgets('Save server rejects an empty address inline',
+      (tester) async {
+    final state = await makeState(RequestLog());
+    await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
+    await tester.pumpAndSettle();
+    await openScreen(tester, 'Settings');
+
+    final before = state.settings.baseUrl;
+    await tester.enterText(find.byType(TextField).first, '   ');
+    await tester.tap(find.text('Save server'));
+    await tester.pumpAndSettle();
+
+    // Nothing was stored, and the field shows why.
+    expect(state.settings.baseUrl, before);
+    expect(find.textContaining('Enter your desktop address'), findsWidgets);
+    state.dispose();
+  });
 }

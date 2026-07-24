@@ -4,6 +4,53 @@ All notable changes to PAIOS. Versions follow semantic versioning; the
 version in `pyproject.toml` / `paios.__version__` is the source of truth
 and is what GitHub Release tags must match (`v<version>`).
 
+## [Unreleased] — Connection reliability & first-run readability
+
+### Fixed
+- **False "Offline" on Test Connection.** A model round trip legitimately
+  takes tens of seconds (the Ollama adapter allows 300 s), but both the
+  desktop Test AI and the mobile Test Connection made the call under the
+  short polling deadline (2 s desktop / 5 s mobile) and rendered every
+  timeout as "server unreachable". AI-bearing calls now carry their own
+  deadline (`AI_REQUEST_TIMEOUT_SECONDS`), and timeouts are a distinct
+  error (`ApiTimeout` / `ApiTimeoutException`, a subtype of unreachable)
+  that the UI reports as "still loading", never as offline.
+- **The API server serialized all requests behind one accept loop.** A
+  single in-flight model call blocked every poll, so a healthy backend
+  looked offline to both the desktop and the phone. The transport is now
+  a `ThreadingHTTPServer`; provider-only routes
+  (`routes.CONCURRENT_PATHS`) run outside a new process-wide domain lock,
+  while every route that touches the store or kernel stays serialized
+  behind it (per-request context moved to thread-local).
+- **Mobile "Save server" did nothing visible.** The button now
+  validates the address, shows "Saving…", persists unconditionally
+  (settings survive an unreachable desktop), re-checks the connection,
+  and reports the outcome — inline and as a snackbar.
+- **Mobile Test Connection replaced with a staged check**
+  (`connection_check.dart`): desktop → pairing → desktop AI, naming the
+  link that broke instead of a blanket "Offline". The phone still asks
+  the desktop for AI answers and never contacts Ollama directly.
+- **Mobile LAN probe mis-normalized the address**, so a reachable
+  desktop entered as `host:port` or with a trailing slash was classified
+  unreachable. The probe now normalizes exactly like `ApiClient`.
+- **First-run readability.** The desktop wizard pinned every surface it
+  owns to the app palette, and both themes now define a WCAG-AA disabled
+  text colour (Qt's derived grey was unreadable on the wizard's disabled
+  controls). The Android launch/normal window and splash use the app's
+  own dark surface, removing the white flash on cold start.
+
+### Changed
+- Desktop Test AI now walks the chain in two stages (backend, then
+  provider) with the AI deadline on the provider call and each stage
+  painted before it blocks; the Intelligence page's four-call refresh is
+  throttled off the poll cadence, which was the actual per-poll UI cost.
+- Mobile polling is re-entrancy-guarded and skips re-encoding an
+  unchanged dashboard; the app root rebuilds on theme change only, not on
+  every poll tick.
+- Every API request is logged in full (method, path, headers, body,
+  status, response, tracebacks) with credentials redacted; nothing is
+  swallowed.
+
 ## [2.4.0] — 2026-07-23 — Milestones 21–25 "AI, Networking, Remote Access, Desktop & Mobile"
 
 ### Added — Milestone 21 "AI & Networking"

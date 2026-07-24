@@ -120,7 +120,16 @@ class TestWizardPersistence:
         wizard = FirstRunWizard(base_url=live_server)
         wizard.url_page.test_connection()
         assert wizard.url_page.result_label.text().startswith("✓")
+        assert wizard.url_page.test_button.isEnabled()
         wizard.url_page.url_edit.setText("http://127.0.0.1:9")
         wizard.url_page.test_connection()
         assert wizard.url_page.result_label.text().startswith("✗")
+        assert wizard.url_page.test_button.isEnabled()
+        wizard.deleteLater()
+
+    def test_test_connection_needs_an_address(self, qapp):
+        wizard = FirstRunWizard()
+        wizard.url_page.url_edit.setText("   ")
+        wizard.url_page.test_connection()
+        assert "Enter the address" in wizard.url_page.result_label.text()
         wizard.deleteLater()

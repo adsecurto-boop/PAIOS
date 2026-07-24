@@ -47,7 +47,15 @@ class ConnectionManager {
     this.httpFactory,
   });
 
-  bool get _hasLan => lanUrl != null && lanUrl!.isNotEmpty;
+  bool get _hasLan => lanUrl != null && lanUrl!.trim().isNotEmpty;
+
+  /// The probe must speak the same dialect as [ApiClient]: the settings
+  /// field holds whatever the user typed ("192.168.1.15:8765",
+  /// "http://host:8765/"), and probing that text verbatim built an
+  /// unusable URI - so a desktop the ApiClient could reach perfectly
+  /// well was reported unreachable and the phone fell through to
+  /// "Offline".
+  String get _probeBase => ApiClient.normalizeUrl(lanUrl!);
   bool get _hasRelay =>
       relayUrl != null &&
       relayUrl!.isNotEmpty &&
@@ -99,7 +107,7 @@ class ConnectionManager {
     final http.Client probe = _newHttp();
     try {
       final response = await probe
-          .get(Uri.parse('${lanUrl!}/status'))
+          .get(Uri.parse('$_probeBase/status'))
           .timeout(lanProbeTimeout);
       return response.statusCode == 200;
     } catch (_) {

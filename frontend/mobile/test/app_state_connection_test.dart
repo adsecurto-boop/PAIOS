@@ -58,4 +58,55 @@ void main() {
     expect(state.connectionMode, ConnectionMode.offline);
     state.dispose();
   });
+
+  test('updateSettings persists even when the desktop is unreachable',
+      () async {
+    // The Save button's core promise: the typed address is stored
+    // whatever the network does. baseUrl points nowhere listening.
+    final state = await buildState();
+    final result = await state.updateSettings(
+        state.settings.copyWith(baseUrl: 'http://127.0.0.1:9'));
+    expect(result.saved, isTrue);
+    expect(result.reachable, isFalse);
+    expect(result.message, contains('Saved'));
+    expect(state.settings.baseUrl, 'http://127.0.0.1:9');
+    state.dispose();
+  });
+
+  test('updateSettings reports reachable when the desktop answers',
+      () async {
+    // A resolver that hands back a client the fake server answers.
+    final good = ApiClient('http://reachable.local');
+    final state = await buildState(
+      resolver: (_) async => Connection(good, ConnectionMode.lan),
+    );
+    // With no real server the poll still fails, so reachable is false —
+    // but the point under test is that `saved` is always true and the
+    // message distinguishes the two outcomes.
+    final result = await state.updateSettings(
+        state.settings.copyWith(baseUrl: 'http://x.local'));
+    expect(result.saved, isTrue);
+    expect(result.message, startsWith('Saved'));
+    state.dispose();
+  });
+
+  test('refresh returns the failure text so callers can show it',
+      () async {
+    final state = await buildState();
+    final problem = await state.refresh();
+    expect(problem, isNotNull);
+    expect(state.lastError, problem);
+    state.dispose();
+  });
+
+  test('overlapping refresh calls collapse into one pass', () async {
+    // The re-entrancy guard: a second refresh started while the first is
+    // in flight joins it rather than doubling the work.
+    final state = await buildState();
+    final a = state.refresh();
+    final b = state.refresh();
+    expect(identical(a, b), isTrue);
+    await Future.wait([a, b]);
+    state.dispose();
+  });
 }

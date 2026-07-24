@@ -57,17 +57,21 @@ class PaiosApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: state,
-      builder: (context, _) => MaterialApp(
+    // Listens to the THEME, not to the whole AppState. Watching AppState
+    // here rebuilt MaterialApp — the application root — on every poll
+    // tick and every notification, for a value that changes only when
+    // the user flips the switch.
+    return ValueListenableBuilder<bool>(
+      valueListenable: state.darkTheme,
+      builder: (context, dark, child) => MaterialApp(
         title: 'PAIOS',
         debugShowCheckedModeBanner: false,
         theme: lightTheme(),
-        darkTheme: darkTheme(),
-        themeMode:
-            state.settings.darkTheme ? ThemeMode.dark : ThemeMode.light,
-        home: HomeShell(state: state, startPolling: startPolling),
+        darkTheme: darkThemeData(),
+        themeMode: dark ? ThemeMode.dark : ThemeMode.light,
+        home: child,
       ),
+      child: HomeShell(state: state, startPolling: startPolling),
     );
   }
 }

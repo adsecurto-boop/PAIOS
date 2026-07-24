@@ -3,11 +3,22 @@
 // One method per endpoint; every user action calls exactly one method
 // and every method issues exactly one request. Failures become:
 //  - ApiUnreachableException  (no route to the laptop; go offline)
+//  - ApiTimeoutException      (a SUBTYPE of the above: the laptop
+//    accepted the connection but did not answer in time - a different
+//    fact, and the one an AI round trip produces)
 //  - ApiResponseException     (the API answered with an error payload)
+//
+// Deadlines are per call, not per client. Polling wants a short one so a
+// hung desktop cannot freeze the phone; an assistant question runs
+// through a local language model and legitimately takes a minute. One
+// number cannot serve both, and using the poll deadline for the
+// assistant is why a working desktop reported "Server unreachable".
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class ApiUnreachableException implements Exception {
@@ -15,6 +26,15 @@ class ApiUnreachableException implements Exception {
   ApiUnreachableException(this.detail);
   @override
   String toString() => 'Server unreachable: $detail';
+}
+
+/// The server was reached but stayed silent past the deadline. Callers
+/// that can wait (the assistant) tell the user to wait; the poll loop
+/// still treats it as an outage, which is right for a poll.
+class ApiTimeoutException extends ApiUnreachableException {
+  final Duration waited;
+  ApiTimeoutException(this.waited)
+      : super('no answer within ${waited.inSeconds}s');
 }
 
 class ApiResponseException implements Exception {
@@ -27,6 +47,14 @@ class ApiResponseException implements Exception {
 }
 
 class ApiClient {
+  /// Poll/action deadline: the desktop is a LAN hop away.
+  static const Duration defaultTimeout = Duration(seconds: 5);
+
+  /// Deadline for calls the desktop answers by asking a language model.
+  /// It matches the backend's own completion ceiling, so the phone never
+  /// gives up on a request the desktop is still working on.
+  static const Duration aiTimeout = Duration(seconds: 300);
+
   final String baseUrl;
   final Duration timeout;
   final http.Client _http;
@@ -37,15 +65,20 @@ class ApiClient {
   String? authToken;
 
   ApiClient(String url,
-      {this.timeout = const Duration(seconds: 5),
-      http.Client? client,
-      this.authToken})
-      : baseUrl = _normalize(url),
+      {this.timeout = defaultTimeout, http.Client? client, this.authToken})
+      : baseUrl = normalizeUrl(url),
         _http = client ?? http.Client();
 
-  static String _normalize(String url) {
+  /// The one place a typed address becomes a usable base URL: trims,
+  /// drops a trailing '/', and supplies http:// when the scheme is
+  /// missing. Public because the connection probe MUST normalize the
+  /// same way this client does - probing the raw text reported a
+  /// perfectly reachable desktop as unreachable.
+  static String normalizeUrl(String url) {
     var text = url.trim();
-    if (text.endsWith('/')) text = text.substring(0, text.length - 1);
+    while (text.endsWith('/')) {
+      text = text.substring(0, text.length - 1);
+    }
     if (!text.startsWith('http://') && !text.startsWith('https://')) {
       text = 'http://$text';
     }
@@ -54,39 +87,63 @@ class ApiClient {
 
   void close() => _http.close();
 
+  /// Test seam: issue one request with an explicit deadline. Production
+  /// code calls the typed methods; this only exists so a test can drive
+  /// the AI path with a short deadline instead of the real five minutes.
+  @visibleForTesting
+  Future<dynamic> requestForTest(String method, String path,
+          [Map<String, dynamic>? body, Duration? deadline]) =>
+      _request(method, path, body, deadline);
+
+  void _log(String message) {
+    if (kReleaseMode) return;
+    developer.log(message, name: 'paios.api');
+  }
+
   Future<dynamic> _request(String method, String path,
-      [Map<String, dynamic>? body]) async {
+      [Map<String, dynamic>? body, Duration? deadline]) async {
+    final wait = deadline ?? timeout;
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{
       'Content-Type': 'application/json; charset=utf-8',
       if (authToken != null && path.startsWith('/mobile'))
         'Authorization': 'Bearer $authToken',
     };
+    final started = DateTime.now();
+    _log('-> $method $uri '
+        'auth=${headers.containsKey('Authorization')} '
+        'timeout=${wait.inSeconds}s body=${body == null ? '{}' : jsonEncode(body)}');
     http.Response response;
     try {
       switch (method) {
         case 'GET':
-          response = await _http.get(uri, headers: headers).timeout(timeout);
+          response = await _http.get(uri, headers: headers).timeout(wait);
         case 'PUT':
           response = await _http
               .put(uri, headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(timeout);
+              .timeout(wait);
         case 'DELETE':
           response = await _http
               .delete(uri, headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(timeout);
+              .timeout(wait);
         default:
           response = await _http
               .post(uri, headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(timeout);
+              .timeout(wait);
       }
     } on TimeoutException {
-      throw ApiUnreachableException('timed out after ${timeout.inSeconds}s');
+      _log('<- $method $uri TIMEOUT after ${wait.inSeconds}s');
+      throw ApiTimeoutException(wait);
     } on SocketException catch (error) {
+      _log('<- $method $uri SOCKET ${error.message}');
       throw ApiUnreachableException(error.message);
     } on http.ClientException catch (error) {
+      _log('<- $method $uri CLIENT ${error.message}');
       throw ApiUnreachableException(error.message);
     }
+    final elapsed = DateTime.now().difference(started).inMilliseconds;
+    _log('<- $method $uri ${response.statusCode} in ${elapsed}ms '
+        '(${response.bodyBytes.length} bytes)');
     final dynamic decoded;
     try {
       decoded = jsonDecode(utf8.decode(response.bodyBytes));
@@ -98,11 +155,13 @@ class ApiClient {
       final error = decoded is Map<String, dynamic>
           ? decoded['error'] as Map<String, dynamic>?
           : null;
-      throw ApiResponseException(
+      final failure = ApiResponseException(
         response.statusCode,
         error?['type'] as String? ?? 'HttpError',
         error?['message'] as String? ?? 'HTTP ${response.statusCode}',
       );
+      _log('<- $method $uri ERROR ${failure.errorType}: ${failure.message}');
+      throw failure;
     }
     return decoded;
   }
@@ -362,7 +421,12 @@ class ApiClient {
 
   /// One question, one answer. source=="heuristic" means the desktop
   /// has no AI provider - still an answer, never an error.
+  ///
+  /// The desktop answers this by running a language model, so it gets
+  /// the AI deadline, not the poll deadline. The phone still talks only
+  /// to the desktop: the model lives there and is never contacted from
+  /// here.
   Future<Map<String, dynamic>> assistantQuery(String text) async =>
-      await _request('POST', '/mobile/assistant/query', {'text': text})
-          as Map<String, dynamic>;
+      await _request('POST', '/mobile/assistant/query', {'text': text},
+          aiTimeout) as Map<String, dynamic>;
 }

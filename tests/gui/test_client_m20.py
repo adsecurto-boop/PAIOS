@@ -13,10 +13,14 @@ class RecordingClient(ApiClient):
     def __init__(self, responses: dict | None = None) -> None:
         super().__init__("http://test")
         self.calls: list[tuple] = []
+        #: (method, path, deadline) for the calls that name their own —
+        #: an AI round trip must not inherit the polling deadline.
+        self.deadlines: list[tuple] = []
         self._responses = responses or {}
 
-    def _request(self, method: str, path: str, body=None):
+    def _request(self, method: str, path: str, body=None, timeout=None):
         self.calls.append((method, path, body))
+        self.deadlines.append((method, path, timeout))
         return self._responses.get((method, path), {})
 
     @property
@@ -161,6 +165,29 @@ class TestAssistantAndBackups:
         )
         client.assistant_explain_day()
         assert client.last == ("POST", "/assistant/explain-day", {})
+
+    def test_ai_calls_do_not_inherit_the_polling_deadline(self):
+        """The regression behind the false "Offline" report: a model
+        round trip was capped at the 2 s poll timeout and every timeout
+        was rendered as an unreachable server."""
+        from paios_gui.client import (
+            AI_REQUEST_TIMEOUT_SECONDS,
+            PROBE_TIMEOUT_SECONDS,
+        )
+
+        client = RecordingClient()
+        client.assistant_test()
+        assert client.deadlines[-1] == (
+            "POST", "/assistant/test", AI_REQUEST_TIMEOUT_SECONDS
+        )
+        client.assistant_plan("x")
+        assert client.deadlines[-1][2] == AI_REQUEST_TIMEOUT_SECONDS
+        client.assistant_ollama()
+        assert client.deadlines[-1][2] == PROBE_TIMEOUT_SECONDS
+        # Polling keeps the short deadline: a hung server must not hang
+        # the window.
+        client.get_dashboard()
+        assert client.deadlines[-1][2] is None
 
     def test_backup_endpoints(self):
         client = RecordingClient({("GET", "/backups"): {"backups": []}})

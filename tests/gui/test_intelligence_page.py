@@ -7,6 +7,7 @@ promise that PAIOS always works without a model.
 
 import pytest
 
+from paios_gui.client import ApiResponseError, ApiTimeout, ApiUnreachable
 from paios_gui.intelligence_page import IntelligencePage
 
 
@@ -55,6 +56,55 @@ class TestTestAi:
     def test_test_ai_uses_deterministic_engine_offline(self, page):
         page._on_test()
         assert "Deterministic engine" in page.test_output.text()
+
+    def test_test_ai_reports_connected_on_success(self, page):
+        page._on_test()
+        assert page.test_output.text().startswith("Connected —")
+
+    def test_test_ai_re_enables_the_button_when_done(self, page):
+        page._on_test()
+        assert page.test_button.isEnabled()
+
+
+class TestFailureWording:
+    """A slow model, a refused connection and an HTTP error are three
+    different facts. Reporting all of them as "Offline" is the bug this
+    wording replaces."""
+
+    def test_timeout_is_not_reported_as_offline(self):
+        text = IntelligencePage.explain_failure(ApiTimeout(300.0))
+        assert "Offline" not in text
+        assert "300s" in text
+        assert "still loading" in text
+
+    def test_unreachable_says_the_backend_is_not_running(self):
+        text = IntelligencePage.explain_failure(
+            ApiUnreachable("Connection refused")
+        )
+        assert "Could not reach the PAIOS backend" in text
+        assert "Connection refused" in text
+
+    def test_http_error_surfaces_status_and_type(self):
+        text = IntelligencePage.explain_failure(
+            ApiResponseError(500, "AdapterError", "model exploded")
+        )
+        assert "HTTP 500" in text
+        assert "AdapterError" in text
+        assert "model exploded" in text
+
+    def test_provider_refusal_is_not_an_offline_report(self, page):
+        page._show_test_result(
+            {
+                "source": "llm",
+                "ok": False,
+                "answer": "The provider did not answer: no model",
+            },
+            1234,
+        )
+        text = page.test_output.text()
+        assert "Backend is reachable" in text
+        assert "no model" in text
+        assert "Offline" not in text
 
 
 class TestApplyMode:

@@ -172,6 +172,116 @@ class TestLiveServer:
         assert api_app.started is True
 
 
+class TestSlowProviderDoesNotBlockPolling:
+    """The regression behind the false "OFFLINE" report.
+
+    A model round trip is allowed 300 s by the Ollama adapter. While one
+    is in flight the desktop dashboard and the phone keep polling every
+    few seconds with short timeouts; if the provider call blocks the
+    server, every poll times out and both surfaces show "server
+    unreachable" for a server that is up and answering.
+    """
+
+    DELAY_SECONDS = 1.5
+
+    class _SlowAssistant:
+        def __init__(self, delay):
+            self._delay = delay
+
+        def answer_question(self, question, **inputs):
+            import time as _time
+
+            _time.sleep(self._delay)
+
+            class _Result:
+                adapter = "slow-test-adapter"
+                answer = "still here"
+
+            return _Result()
+
+    @pytest.fixture
+    def live_slow(self, api_app):
+        server = ApiServer(ApiConfig(port=0), application=api_app)
+        server._assistant = self._SlowAssistant(self.DELAY_SECONDS)
+        server.start()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        yield f"http://127.0.0.1:{server.port}"
+        server.shutdown()
+        thread.join(timeout=5)
+
+    def test_status_answers_while_the_model_is_thinking(self, live_slow):
+        import time
+
+        answers: dict = {}
+
+        def run_ai():
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    live_slow + "/assistant/test", data=b"{}", method="POST"
+                ),
+                timeout=30,
+            ) as reply:
+                answers["ai"] = json.loads(reply.read().decode())
+
+        worker = threading.Thread(target=run_ai, daemon=True)
+        worker.start()
+        time.sleep(0.3)  # the model call is now in flight
+
+        started = time.perf_counter()
+        with urllib.request.urlopen(live_slow + "/status", timeout=5) as reply:
+            payload = json.loads(reply.read().decode())
+        elapsed = time.perf_counter() - started
+
+        assert payload["state"] == "Running"
+        # The poll must not have queued behind the provider call.
+        assert elapsed < self.DELAY_SECONDS / 2, (
+            f"/status waited {elapsed:.2f}s behind the model call"
+        )
+        worker.join(timeout=30)
+        assert answers["ai"]["ok"] is True
+
+    def test_domain_routes_stay_serialized(self, live_slow):
+        """The lock still exists: concurrent domain writes do not race."""
+        import time
+
+        created: list[int] = []
+        errors: list[Exception] = []
+
+        def create(index):
+            try:
+                request = urllib.request.Request(
+                    live_slow + "/goals",
+                    data=json.dumps({"name": f"Parallel {index}"}).encode(),
+                    method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(request, timeout=10) as reply:
+                    created.append(reply.status)
+            except Exception as error:  # recorded, never swallowed
+                errors.append(error)
+
+        workers = [
+            threading.Thread(target=create, args=(i,), daemon=True)
+            for i in range(8)
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=15)
+        time.sleep(0)
+        assert not errors, errors
+        assert created == [201] * 8
+        with urllib.request.urlopen(live_slow + "/goals", timeout=5) as reply:
+            names = {
+                goal["name"]
+                for goal in json.loads(reply.read().decode())["goals"]
+            }
+        # Every write survived: none was lost to a read-modify-write race
+        # on the JSON store.
+        assert {f"Parallel {i}" for i in range(8)} <= names
+
+
 class TestDelegation:
     def test_router_touches_only_the_facade(self, router):
         # M20 (approved): the router holds the facade plus the additive
@@ -193,8 +303,10 @@ class TestDelegation:
             "_relay_status",
             "_relay_reload",
             "_relay_authorize",
-            "_request_headers",
-            "_request_client",
+            # One thread-local holding the per-request transport context
+            # (auth headers + client address). Thread-local because the
+            # server now serves provider-only routes concurrently.
+            "_request_state",
         }
 
     def test_actions_delegate_to_facade_methods(self, api_app):

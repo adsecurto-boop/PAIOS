@@ -33,6 +33,13 @@ DARK = {
     "text_dim": "#8b919c",
     "hover": "#6db0f0",
     "selection": "#2b3340",
+    # Disabled text. Qt DERIVES this when the palette leaves the Disabled
+    # colour group unset, and its derivation is a mid grey chosen without
+    # knowing our background — on the first-run wizard, whose Intelligence
+    # page disables three buttons whenever the backend is not answering
+    # yet, that produced washed-out labels nobody could read. Both values
+    # below clear 4.5:1 against their own surface.
+    "text_disabled": "#8e949e",
 }
 
 LIGHT = {
@@ -44,6 +51,7 @@ LIGHT = {
     "text_dim": "#6b7280",
     "hover": "#2f7fd0",
     "selection": "#e3edf9",
+    "text_disabled": "#636972",
 }
 
 THEMES = {"dark": DARK, "light": LIGHT}
@@ -66,8 +74,16 @@ def build_stylesheet(p: dict) -> str:
     return f"""
 QMainWindow, QDialog {{ background: {p['bg']}; }}
 QWidget {{ color: {p['text']}; font-size: 13px; }}
+QWidget:disabled {{ color: {p['text_disabled']}; }}
+/* The setup wizard is the first screen a new user ever sees, and on
+   Windows QWizard is happy to paint its own light chrome. Pin every
+   surface it owns — frame, header band, watermark column — so it can
+   never render as light-grey-on-white before the palette settles. */
 QWizard, QWizardPage {{ background: {p['bg']}; }}
-QWizard QLabel {{ color: {p['text']}; }}
+QWizard > QWidget {{ background: {p['bg']}; }}
+QWizard QFrame {{ background: {p['bg']}; }}
+QWizard QLabel {{ color: {p['text']}; background: transparent; }}
+QWizard QLabel:disabled {{ color: {p['text_disabled']}; }}
 QToolTip {{
     background: {p['surface_alt']};
     color: {p['text']};
@@ -129,7 +145,10 @@ QPushButton {{
 }}
 QPushButton:hover {{ border-color: {ACCENT}; }}
 QPushButton:focus {{ border: 1px solid {ACCENT}; }}
-QPushButton:disabled {{ color: {p['text_dim']}; }}
+QPushButton:disabled {{
+    color: {p['text_disabled']};
+    background: {p['surface']};
+}}
 QTableWidget {{
     background: {p['surface']};
     border: 1px solid {p['border']};
@@ -156,6 +175,14 @@ QLineEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTimeEdit {{
 }}
 QLineEdit:focus, QPlainTextEdit:focus, QComboBox:focus {{
     border: 1px solid {ACCENT};
+}}
+QLineEdit:disabled, QPlainTextEdit:disabled, QSpinBox:disabled,
+QDoubleSpinBox:disabled, QComboBox:disabled, QTimeEdit:disabled {{
+    color: {p['text_disabled']};
+    background: {p['surface']};
+}}
+QRadioButton:disabled, QCheckBox:disabled {{
+    color: {p['text_disabled']};
 }}
 QScrollArea {{ border: none; }}
 QStatusBar {{ color: {p['text_dim']}; }}
@@ -233,6 +260,42 @@ def _qpalette(p: dict) -> QPalette:
     palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(p["surface_alt"]))
     palette.setColor(QPalette.ColorRole.ToolTipText, QColor(p["text"]))
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(p["text_dim"]))
+    # Every colour group, explicitly. An unset group is not "the same as
+    # Active" — Qt derives it, and the derived Disabled/Inactive text is
+    # a low-contrast grey that made disabled wizard controls unreadable.
+    disabled = QColor(p["text_disabled"])
+    for role in (
+        QPalette.ColorRole.WindowText,
+        QPalette.ColorRole.Text,
+        QPalette.ColorRole.ButtonText,
+        QPalette.ColorRole.PlaceholderText,
+    ):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, disabled)
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Window,
+        QColor(p["bg"]),
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Base,
+        QColor(p["surface"]),
+    )
+    palette.setColor(
+        QPalette.ColorGroup.Disabled,
+        QPalette.ColorRole.Button,
+        QColor(p["surface_alt"]),
+    )
+    # Inactive (the window does not have focus) must look like Active,
+    # not like a third, dimmer theme.
+    for role in (
+        QPalette.ColorRole.WindowText,
+        QPalette.ColorRole.Text,
+        QPalette.ColorRole.ButtonText,
+    ):
+        palette.setColor(
+            QPalette.ColorGroup.Inactive, role, QColor(p["text"])
+        )
     return palette
 
 

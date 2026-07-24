@@ -93,6 +93,38 @@ void main() {
     connection.client.close();
   });
 
+  // The probe used to dial the settings text verbatim. Everything the
+  // ApiClient happily normalizes - a missing scheme, a trailing slash -
+  // produced an unusable probe URI, so a desktop that was answering was
+  // classified unreachable and the phone dropped to Offline.
+  group('the LAN probe normalizes the address exactly like ApiClient', () {
+    Future<void> expectLan(String Function(String) shape) async {
+      final lan = MockLan();
+      await lan.start();
+      final manager = ConnectionManager(
+        lanUrl: shape(lan.url),
+        lanProbeTimeout: const Duration(seconds: 1),
+      );
+      final connection = await manager.resolve();
+      expect(connection.mode, ConnectionMode.lan,
+          reason: 'probed ${shape(lan.url)}');
+      connection.client.close();
+      await lan.stop();
+    }
+
+    test('a plain host:port with no scheme', () async {
+      await expectLan((url) => url.replaceFirst('http://', ''));
+    });
+
+    test('a trailing slash', () async {
+      await expectLan((url) => '$url/');
+    });
+
+    test('surrounding whitespace', () async {
+      await expectLan((url) => '  $url  ');
+    });
+  });
+
   test('offline when relay is set but the device is not paired', () async {
     final manager = ConnectionManager(
       lanUrl: 'http://127.0.0.1:9',

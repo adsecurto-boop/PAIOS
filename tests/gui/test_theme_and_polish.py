@@ -35,6 +35,58 @@ class TestThemeSystem:
         assert theme.status_color("unknown") == theme.TEXT_DIM
 
 
+def _relative_luminance(hex_color: str) -> float:
+    value = hex_color.lstrip("#")
+    channels = []
+    for index in (0, 2, 4):
+        raw = int(value[index:index + 2], 16) / 255
+        channels.append(
+            raw / 12.92 if raw <= 0.04045 else ((raw + 0.055) / 1.055) ** 2.4
+        )
+    red, green, blue = channels
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _contrast(foreground: str, background: str) -> float:
+    lighter, darker = sorted(
+        (_relative_luminance(foreground), _relative_luminance(background)),
+        reverse=True,
+    )
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+class TestReadability:
+    """The first-run wizard disables controls whenever the backend is not
+    answering yet — which is exactly the first-startup situation. Qt's
+    DERIVED disabled grey was unreadable there, so both palettes now name
+    the colour and both must clear WCAG AA for body text."""
+
+    def test_every_palette_defines_disabled_text(self):
+        for name, palette in theme.THEMES.items():
+            assert "text_disabled" in palette, name
+
+    def test_disabled_text_clears_wcag_aa_on_every_surface(self):
+        for name, palette in theme.THEMES.items():
+            for surface in ("bg", "surface", "surface_alt"):
+                ratio = _contrast(palette["text_disabled"], palette[surface])
+                assert ratio >= 4.5, f"{name}/{surface}: {ratio:.2f}:1"
+
+    def test_normal_and_dim_text_clear_wcag_aa(self):
+        for name, palette in theme.THEMES.items():
+            for key in ("text", "text_dim"):
+                ratio = _contrast(palette[key], palette["bg"])
+                assert ratio >= 4.5, f"{name}/{key}: {ratio:.2f}:1"
+
+    def test_stylesheet_pins_the_wizard_surfaces(self):
+        """No native wizard chrome may paint an unthemed band behind the
+        setup screens."""
+        for palette in theme.THEMES.values():
+            css = theme.build_stylesheet(palette)
+            assert "QWizard, QWizardPage" in css
+            assert "QWizard QLabel" in css
+            assert palette["text_disabled"] in css
+
+
 class TestRuntimeToggle:
     def test_set_theme_applies_and_returns_mode(self, window, monkeypatch):
         # Do not touch the real settings file during the test.

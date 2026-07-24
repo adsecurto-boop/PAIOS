@@ -12,6 +12,7 @@ module is imported.
 """
 
 import os
+import threading
 from datetime import timedelta
 
 from paios.application.application import Application
@@ -110,11 +111,12 @@ class ApiRouter:
         self._relay_status = relay_status
         self._relay_reload = relay_reload
         self._relay_authorize = relay_authorize
-        # Per-request transport context. The HTTP server is deliberately
-        # single-threaded (see server.py), so stashing per request is
-        # safe; tests calling handle() directly are sequential too.
-        self._request_headers: dict | None = None
-        self._request_client: str | None = None
+        # Per-request transport context (auth headers, client address).
+        # THREAD-LOCAL: the server serializes domain work behind one lock
+        # but serves slow provider calls concurrently (see server.py), so
+        # two requests can be in handle() at once. Stashing on ``self``
+        # would let one request read another's Authorization header.
+        self._request_state = threading.local()
 
     def _require_planning(self) -> PlanningService:
         if self._planning is None:
@@ -128,6 +130,14 @@ class ApiRouter:
 
     # --- dispatch --------------------------------------------------------
 
+    @property
+    def _request_headers(self) -> dict | None:
+        return getattr(self._request_state, "headers", None)
+
+    @property
+    def _request_client(self) -> str | None:
+        return getattr(self._request_state, "client_host", None)
+
     def handle(
         self,
         method: str,
@@ -136,15 +146,15 @@ class ApiRouter:
         headers: dict | None = None,
         client_host: str | None = None,
     ) -> tuple[int, dict]:
-        self._request_headers = headers
-        self._request_client = client_host
+        self._request_state.headers = headers
+        self._request_state.client_host = client_host
         try:
             return self._dispatch(method.upper(), path, body)
         except Exception as error:  # translated, never propagated
             return translate(error)
         finally:
-            self._request_headers = None
-            self._request_client = None
+            self._request_state.headers = None
+            self._request_state.client_host = None
 
     def _dispatch(self, method: str, path: str, body) -> tuple[int, dict]:
         segments = tuple(
@@ -1517,3 +1527,35 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("GET", ("system", "relay"), ApiRouter._get_system_relay),
     ("PUT", ("system", "relay"), ApiRouter._put_system_relay),
 )
+
+
+#: Routes the transport may serve WITHOUT holding the domain lock.
+#:
+#: Every entry below is external I/O only — the configured AI provider
+#: or the local Ollama server — and touches neither the Application, the
+#: runtime kernel, nor any JSON store. Serving them concurrently is what
+#: stops a multi-minute model round trip from starving every poll: while
+#: `POST /assistant/test` waits on the model, `/dashboard` and `/status`
+#: keep answering, so the desktop and the phone no longer report a false
+#: "offline" for a server that is up. Everything not listed here stays
+#: serialized behind the one lock, so the store and the kernel see the
+#: same one-request-at-a-time world they were written for.
+CONCURRENT_PATHS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("assistant", "test"),
+        ("assistant", "setup"),
+        ("assistant", "ollama"),
+        ("assistant", "ollama", "pull"),
+        ("assistant", "ollama", "remove"),
+        ("assistant", "ollama", "show"),
+    }
+)
+
+
+def runs_concurrently(path: str) -> bool:
+    """True when [path] may be served without the domain lock."""
+    segments = tuple(
+        segment for segment in path.split("?")[0].strip("/").split("/")
+        if segment
+    )
+    return segments in CONCURRENT_PATHS

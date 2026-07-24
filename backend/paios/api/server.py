@@ -1,9 +1,24 @@
 """The HTTP binding: stdlib http.server around the pure ApiRouter.
 
-Deliberately SINGLE-THREADED (plain HTTPServer, not ThreadingHTTPServer):
-the JSON store and the runtime kernel are not synchronized for concurrent
-mutation, so serializing requests at the transport is a correctness
-decision, not a simplification.
+Concurrency model (revised): the socket layer is threaded, the DOMAIN is
+still serialized.
+
+The JSON store and the runtime kernel are not synchronized for concurrent
+mutation, so every request that can reach them is taken behind one
+process-wide lock — exactly the one-request-at-a-time world they were
+written for. What changed is that the *transport* no longer imposes that
+serialization on requests which never reach them.
+
+The routes in ``routes.CONCURRENT_PATHS`` talk only to an AI provider or
+to the local Ollama server. Under the old plain HTTPServer a single model
+round trip (the Ollama adapter allows 300 s) blocked the accept loop, so
+every poll from the desktop dashboard and the phone timed out and both
+reported "OFFLINE — server unreachable" for a server that was healthy and
+answering. Those routes now run outside the lock, on their own thread.
+
+Every request is logged in full (method, path, headers, body, status,
+response, and the traceback of anything unexpected) to the "paios.api"
+logger; secrets are redacted. Nothing is swallowed.
 
 Shutdown: Ctrl+C (KeyboardInterrupt) leaves serve_forever cleanly, the
 socket is closed, and the composed Application is stopped — the mission's
@@ -11,7 +26,11 @@ graceful shutdown.
 """
 
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import logging
+import threading
+import time
+import traceback
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TextIO
 
@@ -21,12 +40,47 @@ from paios.api import ai_settings, assistant_support
 from paios.api.config import ApiConfig
 from paios.api.mobile_support import PairingService
 from paios.api.errors import payload as error_payload
-from paios.api.routes import ApiRouter
+from paios.api.routes import ApiRouter, runs_concurrently
 from paios.planning.metadata_planner import MetadataPlanner
 from paios.planning.service import PlanningService
 from paios.system.backup import BackupManager
 
 _MAX_BODY_BYTES = 1_000_000
+
+#: Header/body keys never written to the log in clear.
+_SECRET_KEYS = frozenset(
+    {"authorization", "api_key", "token", "account_key", "code"}
+)
+#: A logged body is a diagnostic, not an archive.
+_MAX_LOGGED_CHARS = 2000
+
+_logger = logging.getLogger("paios.api")
+
+
+def _redact(payload):
+    """A copy of [payload] with credential-bearing values masked."""
+    if isinstance(payload, dict):
+        return {
+            key: (
+                "***redacted***"
+                if str(key).lower() in _SECRET_KEYS
+                else _redact(value)
+            )
+            for key, value in payload.items()
+        }
+    if isinstance(payload, list):
+        return [_redact(item) for item in payload]
+    return payload
+
+
+def _brief(payload) -> str:
+    try:
+        text = json.dumps(_redact(payload), default=str)
+    except Exception:  # a diagnostic must never raise
+        text = repr(payload)
+    if len(text) > _MAX_LOGGED_CHARS:
+        return text[:_MAX_LOGGED_CHARS] + f"…(+{len(text) - _MAX_LOGGED_CHARS})"
+    return text
 
 
 class _ApiRequestHandler(BaseHTTPRequestHandler):
@@ -37,6 +91,67 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
     # The bound ApiServer injects the router via the HTTPServer instance.
     def _router(self) -> ApiRouter:
         return self.server.router  # type: ignore[attr-defined]
+
+    def _lock(self):
+        return self.server.domain_lock  # type: ignore[attr-defined]
+
+    def _dispatch(self, method: str, body=None) -> None:
+        """One request: log it, route it (serialized unless the path is
+        declared concurrent), log the answer, write the answer.
+
+        Exceptions are never swallowed: ApiRouter.handle already turns
+        anything raised into a JSON error payload, and a failure of the
+        transport itself is logged with its traceback and answered 500.
+        """
+        context = self._context()
+        started = time.perf_counter()
+        concurrent = runs_concurrently(self.path)
+        _logger.info(
+            "request method=%s path=%s client=%s concurrent=%s"
+            " headers=%s body=%s",
+            method,
+            self.path,
+            context["client_host"],
+            concurrent,
+            _brief(context["headers"]),
+            _brief(body),
+        )
+        try:
+            if concurrent:
+                status, response = self._router().handle(
+                    method, self.path, body, **context
+                )
+            else:
+                with self._lock():
+                    status, response = self._router().handle(
+                        method, self.path, body, **context
+                    )
+        except Exception as error:  # transport-level failure only
+            _logger.error(
+                "request method=%s path=%s failed in the transport: %s\n%s",
+                method,
+                self.path,
+                error,
+                traceback.format_exc(),
+            )
+            self._respond(
+                500,
+                error_payload(
+                    500, type(error).__name__, f"Transport failure: {error}"
+                ),
+            )
+            return
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        log = _logger.warning if status >= 500 else _logger.info
+        log(
+            "response method=%s path=%s status=%s elapsed_ms=%s body=%s",
+            method,
+            self.path,
+            status,
+            elapsed_ms,
+            _brief(response),
+        )
+        self._respond(status, response)
 
     def _respond(self, status: int, body: dict) -> None:
         encoded = json.dumps(body).encode("utf-8")
@@ -72,44 +187,30 @@ class _ApiRequestHandler(BaseHTTPRequestHandler):
         }
 
     def do_GET(self) -> None:  # noqa: N802 (stdlib naming)
-        status, body = self._router().handle(
-            "GET", self.path, **self._context()
-        )
-        self._respond(status, body)
+        self._dispatch("GET")
 
     def do_POST(self) -> None:  # noqa: N802
         try:
             body = self._read_body()
         except _BadBody:
             return
-        status, response = self._router().handle(
-            "POST", self.path, body, **self._context()
-        )
-        self._respond(status, response)
+        self._dispatch("POST", body)
 
     def do_PUT(self) -> None:  # noqa: N802 (M20: edit/metadata routes)
         try:
             body = self._read_body()
         except _BadBody:
             return
-        status, response = self._router().handle(
-            "PUT", self.path, body, **self._context()
-        )
-        self._respond(status, response)
+        self._dispatch("PUT", body)
 
     def do_DELETE(self) -> None:  # noqa: N802 (M20: planning stores only)
-        status, response = self._router().handle(
-            "DELETE", self.path, **self._context()
-        )
-        self._respond(status, response)
+        self._dispatch("DELETE")
 
     def log_message(self, format: str, *args) -> None:
         """No console noise; requests go to the structured log (M16).
         Without configured handlers this is a no-op, preserving the
         pre-M16 silence."""
-        import logging
-
-        logging.getLogger("paios.api").info(format, *args)
+        _logger.info(format, *args)
 
 
 class _BadBody(Exception):
@@ -162,8 +263,12 @@ class ApiServer:
             api_key=ai_settings.api_key_for(self._config.data_dir, resolved),
         )
         self._mobile = PairingService(self._config.data_dir)
-        self._http: HTTPServer | None = None
+        self._http: ThreadingHTTPServer | None = None
         self._serving = False
+        #: The one domain lock. Held for every request except the
+        #: provider-only routes (routes.CONCURRENT_PATHS), so the store
+        #: and the kernel still see one request at a time.
+        self._domain_lock = threading.RLock()
         #: M22: mDNS advertiser, started only in Local Network mode so a
         #: phone can discover the desktop without a typed IP. None in
         #: loopback mode (nothing on 127.0.0.1 to discover).
@@ -209,9 +314,13 @@ class ApiServer:
 
         data_dir = Path(self._config.data_dir)
         bind_host = network.resolve_bind_host(data_dir, self._config.host)
-        http = HTTPServer(
+        http = ThreadingHTTPServer(
             (bind_host, self._config.port), _ApiRequestHandler
         )
+        # Worker threads must not outlive the process (a hung provider
+        # call must never block shutdown) — the mission's graceful stop.
+        http.daemon_threads = True
+        http.domain_lock = self._domain_lock  # type: ignore[attr-defined]
         http.router = ApiRouter(  # type: ignore[attr-defined]
             self._app,
             planning=self._planning,
@@ -284,7 +393,9 @@ class ApiServer:
             return False
         return self._relay_connector.authorize_device(token_hash)
 
-    def _start_discovery(self, bind_host: str, http: HTTPServer, network):
+    def _start_discovery(
+        self, bind_host: str, http: ThreadingHTTPServer, network
+    ):
         """Advertise the API over mDNS when it is LAN-reachable, so a
         phone finds it with no typed IP. Best-effort and loopback-safe:
         loopback mode advertises nothing (returns None)."""
@@ -305,7 +416,7 @@ class ApiServer:
         return advertiser
 
     @staticmethod
-    def _http_port_hint(http: HTTPServer) -> int:
+    def _http_port_hint(http: ThreadingHTTPServer) -> int:
         """The actually bound port (resolves an ephemeral 0 to the real
         one) so the Networking page shows the address phones must use."""
         return http.server_address[1]

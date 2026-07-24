@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 
 const Color _seed = Color(0xFF4C9BE8); // the desktop accent
 
-ThemeData darkTheme() => ThemeData(
+/// Named ...Data so it never reads as the boolean preference of the same
+/// name that AppState publishes.
+ThemeData darkThemeData() => ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
       colorScheme: ColorScheme.fromSeed(

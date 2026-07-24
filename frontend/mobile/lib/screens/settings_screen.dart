@@ -1,12 +1,44 @@
 // Settings: backend URL (never hardcoded elsewhere), refresh interval,
 // dark theme, device pairing (M21), About.
+//
+// Every button here reports what it did. A press that changes stored
+// state must be visibly acknowledged - busy while it works, then the
+// outcome in the user's words - because a silent button is
+// indistinguishable from a broken one.
 import 'package:flutter/material.dart';
 
 import '../services/api_client.dart';
 import '../services/app_state.dart';
+import '../services/connection_check.dart';
 import '../services/pairing_payload.dart';
 
 const List<int> refreshChoices = [2, 5, 10, 30, 60];
+
+/// Rejects an address before it is stored, and says why.
+///
+/// Returns null when [text] is usable. The check is deliberately the
+/// same shape as [ApiClient.normalizeUrl]: whatever passes here is what
+/// the client will actually dial.
+String? validateServerUrl(String text) {
+  final trimmed = text.trim();
+  if (trimmed.isEmpty) {
+    return 'Enter your desktop address, for example 192.168.1.15:8765';
+  }
+  if (trimmed.contains(' ')) return 'An address cannot contain spaces.';
+  final Uri uri;
+  try {
+    uri = Uri.parse(ApiClient.normalizeUrl(trimmed));
+  } on FormatException {
+    return 'That is not a valid address.';
+  }
+  if (uri.host.isEmpty) {
+    return 'That address has no computer name or IP.';
+  }
+  if (uri.hasPort && (uri.port < 1 || uri.port > 65535)) {
+    return 'The port must be between 1 and 65535.';
+  }
+  return null;
+}
 
 class SettingsScreen extends StatefulWidget {
   final AppState state;
@@ -24,6 +56,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late final TextEditingController _relayController;
   late final TextEditingController _pasteController;
   bool _pairing = false;
+
+  // --- Server card state (Problem 1: the silent Save button) -----------
+  bool _savingServer = false;
+  String? _serverError; // inline validation, shown under the field
+  String? _serverNotice; // "Saving…" / "Saved — connected to …"
+  bool _serverNoticeIsError = false;
+
+  // --- Test-connection state ------------------------------------------
+  bool _testing = false;
+  String? _testStage;
+  ConnectionReport? _testReport;
 
   @override
   void initState() {
@@ -55,13 +98,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() {});
   }
 
+  /// The "Save server" button, end to end.
+  ///
+  /// Validate -> show busy -> persist -> re-check -> report. Every one of
+  /// those steps is visible; the press is never a no-op on screen. It
+  /// used to call [AppState.updateSettings] and show nothing at all,
+  /// while that call spent up to twelve seconds probing the network.
+  Future<void> _saveServer() async {
+    if (_savingServer) return;
+    final typed = _urlController.text;
+    final problem = validateServerUrl(typed);
+    if (problem != null) {
+      setState(() {
+        _serverError = problem;
+        _serverNotice = null;
+      });
+      _notify(problem);
+      return;
+    }
+    final normalized = ApiClient.normalizeUrl(typed);
+    setState(() {
+      _savingServer = true;
+      _serverError = null;
+      _serverNoticeIsError = false;
+      _serverNotice = 'Saving…';
+      _urlController.text = normalized;
+    });
+    final result = await widget.state.updateSettings(
+        widget.state.settings.copyWith(baseUrl: normalized));
+    if (!mounted) return;
+    setState(() {
+      _savingServer = false;
+      _serverNotice = result.message;
+      _serverNoticeIsError = !result.saved || !result.reachable;
+    });
+    _notify(result.message);
+  }
+
   Future<void> _saveRemote() async {
-    await widget.state.updateSettings(
+    final result = await widget.state.updateSettings(
         widget.state.settings.copyWith(relayUrl: _relayController.text.trim()));
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    setState(() {});
     _notify(_relayController.text.trim().isEmpty
         ? 'Remote access off — the phone uses Wi-Fi only.'
-        : 'Remote access saved — the phone can reach PAIOS anywhere.');
+        : 'Remote access saved. ${result.message}');
   }
 
   /// Reads a pasted/scanned `paios://pair` payload (or a plain address)
@@ -127,22 +208,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _testPairing() async {
-    final token = widget.state.settings.deviceToken;
-    if (token == null) return;
-    try {
-      final result = await widget.state.client.validateToken(token);
-      _notify(result['valid'] == true
-          ? 'Pairing is valid (${result['device_id']}).'
-          : 'The server did not confirm the token.');
-    } on ApiUnreachableException catch (e) {
-      _notify('Server unreachable: ${e.detail}');
-    } on ApiResponseException catch (e) {
-      _notify(e.status == 401
-          ? 'Token rejected — it was revoked on the desktop.'
-              ' Forget pairing and pair again.'
-          : e.message);
-    }
+  /// Walks the real chain — desktop, pairing, desktop AI — and shows
+  /// each stage as it runs.
+  ///
+  /// This is the button that used to answer "Offline" for a desktop that
+  /// was up: it made one short call and rendered every failure of it,
+  /// including a slow model, as an outage. Now each link reports for
+  /// itself and the AI stage gets the deadline an AI actually needs.
+  Future<void> _testConnection() async {
+    if (_testing) return;
+    setState(() {
+      _testing = true;
+      _testReport = null;
+      _testStage = 'Starting…';
+    });
+    final report = await checkConnection(
+      widget.state.client,
+      deviceToken: widget.state.settings.deviceToken,
+      onStage: (stage) {
+        if (mounted) setState(() => _testStage = stage);
+      },
+    );
+    if (!mounted) return;
+    setState(() {
+      _testing = false;
+      _testStage = null;
+      _testReport = report;
+    });
+    _notify(report.summary);
   }
 
   Future<void> _forgetPairing() async {
@@ -151,6 +244,65 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (mounted) setState(() {});
     _notify('Pairing forgotten — journal, study and assistant need'
         ' a new code.');
+  }
+
+  /// The live narration while the check runs, then one line per link.
+  Widget _buildTestPanel(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final small = Theme.of(context).textTheme.bodySmall;
+    if (_testStage != null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Row(
+          children: [
+            const SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text(_testStage!, style: small)),
+          ],
+        ),
+      );
+    }
+    final report = _testReport;
+    if (report == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (final step in report.steps)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    switch (step.status) {
+                      CheckStatus.ok => Icons.check_circle_outline,
+                      CheckStatus.warning => Icons.info_outline,
+                      CheckStatus.failed => Icons.cancel_outlined,
+                    },
+                    size: 16,
+                    color: switch (step.status) {
+                      CheckStatus.ok => scheme.primary,
+                      CheckStatus.warning => scheme.tertiary,
+                      CheckStatus.failed => scheme.error,
+                    },
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text('${step.name} — ${step.detail}',
+                        style: small),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -170,19 +322,71 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 TextField(
                   controller: _urlController,
                   keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
+                  enabled: !_savingServer,
+                  onSubmitted: (_) => _saveServer(),
+                  onChanged: (_) {
+                    if (_serverError != null) {
+                      setState(() => _serverError = null);
+                    }
+                  },
+                  decoration: InputDecoration(
                     labelText: 'Backend URL',
                     hintText: 'http://192.168.1.15:8765',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
+                    errorText: _serverError,
                   ),
                 ),
+                if (_serverNotice != null) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Icon(
+                        _savingServer
+                            ? Icons.sync
+                            : _serverNoticeIsError
+                                ? Icons.error_outline
+                                : Icons.check_circle_outline,
+                        size: 16,
+                        color: _serverNoticeIsError
+                            ? Theme.of(context).colorScheme.error
+                            : Theme.of(context).colorScheme.primary,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          _serverNotice!,
+                          style: Theme.of(context)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(
+                                  color: _serverNoticeIsError
+                                      ? Theme.of(context).colorScheme.error
+                                      : null),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Align(
                   alignment: Alignment.centerRight,
                   child: FilledButton(
-                    onPressed: () =>
-                        _save(url: _urlController.text.trim()),
-                    child: const Text('Save server'),
+                    onPressed: _savingServer ? null : _saveServer,
+                    child: _savingServer
+                        ? const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2),
+                              ),
+                              SizedBox(width: 8),
+                              Text('Saving…'),
+                            ],
+                          )
+                        : const Text('Save server'),
                   ),
                 ),
               ],
@@ -215,16 +419,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       TextButton(
-                        onPressed: _forgetPairing,
+                        onPressed: _testing ? null : _forgetPairing,
                         child: const Text('Forget pairing'),
                       ),
                       const SizedBox(width: 8),
                       OutlinedButton(
-                        onPressed: _testPairing,
-                        child: const Text('Test connection'),
+                        onPressed: _testing ? null : _testConnection,
+                        child: _testing
+                            ? const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text('Testing…'),
+                                ],
+                              )
+                            : const Text('Test connection'),
                       ),
                     ],
                   ),
+                  _buildTestPanel(context),
                 ] else ...[
                   Text(
                     'On the desktop, open PAIOS and start pairing to get'

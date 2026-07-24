@@ -4,23 +4,58 @@ Pure stdlib (urllib) — no paios imports, no third-party HTTP library.
 One method per REST endpoint the GUI uses; every GUI action maps to
 exactly one method here, and every method issues exactly one request.
 
-Failures become one of two exceptions:
+Failures become one of three exceptions:
 
-- ApiUnreachable  — connection refused / reset / timed out (server down
-  or network gone); the window shows the offline banner and keeps
-  retrying on its poll timer.
+- ApiUnreachable  — connection refused / reset / DNS failure (the server
+  is down or the network is gone); the window shows the offline banner
+  and keeps retrying on its poll timer.
+- ApiTimeout      — a SUBCLASS of ApiUnreachable: the server accepted the
+  connection but did not answer inside the deadline. That is not the
+  same fact as "unreachable", and conflating them is what made a slow
+  model round trip report "Offline" for a server that was answering.
+  Callers that care (the AI surfaces) catch it first; the poll loop
+  keeps treating it as an outage, which is right for a poll.
 - ApiResponseError — the server answered with an error payload
   (validation failure, unknown entity, conflict); carries the HTTP
   status and the API's ``{"error": {"type", "message"}}`` fields.
+
+Timeouts are per call, not per client: polling wants a short deadline so
+a hung server cannot hang the window, while an AI round trip legitimately
+runs for minutes (the backend's Ollama adapter allows 300 s). One number
+cannot serve both, so every method that can be slow names its own.
 """
 
 import json
+import logging
+import socket
+import time
 import urllib.error
 import urllib.request
+
+logger = logging.getLogger("paios.gui")
+
+#: Deadline for calls that make the backend talk to an AI provider. It
+#: matches the backend's own completion ceiling, so the client never
+#: gives up on a request the server is still working on.
+AI_REQUEST_TIMEOUT_SECONDS = 300.0
+#: Deadline for backend calls that probe the local Ollama server. The
+#: backend allows those 4 s, plus room for its own round trip.
+PROBE_TIMEOUT_SECONDS = 15.0
 
 
 class ApiUnreachable(Exception):
     """The server could not be reached at all."""
+
+
+class ApiTimeout(ApiUnreachable):
+    """The server was reached but did not answer inside the deadline."""
+
+    def __init__(self, seconds: float, detail: str = "") -> None:
+        super().__init__(
+            f"no answer within {seconds:g}s"
+            + (f" ({detail})" if detail else "")
+        )
+        self.seconds = seconds
 
 
 class ApiResponseError(Exception):
@@ -41,9 +76,20 @@ class ApiClient:
     def base_url(self) -> str:
         return self._base_url
 
+    @property
+    def timeout(self) -> float:
+        return self._timeout
+
     # --- transport -------------------------------------------------------
 
-    def _request(self, method: str, path: str, body: dict | None = None):
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        timeout: float | None = None,
+    ):
+        deadline = self._timeout if timeout is None else timeout
         data = None
         headers = {"Accept": "application/json"}
         if body is not None:
@@ -52,15 +98,41 @@ class ApiClient:
         request = urllib.request.Request(
             self._base_url + path, data=data, headers=headers, method=method
         )
+        started = time.perf_counter()
         try:
-            with urllib.request.urlopen(
-                request, timeout=self._timeout
-            ) as response:
-                return json.loads(response.read().decode("utf-8"))
+            with urllib.request.urlopen(request, timeout=deadline) as response:
+                payload = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
-            raise _response_error(error) from error
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            failure = _response_error(error)
+            logger.info(
+                "api %s %s -> HTTP %s %s (%.0f ms)",
+                method, path, failure.status, failure,
+                (time.perf_counter() - started) * 1000,
+            )
+            raise failure from error
+        except (socket.timeout, TimeoutError) as error:
+            logger.info(
+                "api %s %s -> timeout after %gs", method, path, deadline
+            )
+            raise ApiTimeout(deadline, str(error) or "read timed out") from error
+        except urllib.error.URLError as error:
+            # urllib wraps a socket timeout in URLError too; keep the
+            # distinction rather than flattening both to "unreachable".
+            if isinstance(error.reason, (socket.timeout, TimeoutError)):
+                logger.info(
+                    "api %s %s -> timeout after %gs", method, path, deadline
+                )
+                raise ApiTimeout(deadline, str(error.reason)) from error
+            logger.info("api %s %s -> unreachable: %s", method, path, error)
             raise ApiUnreachable(str(error)) from error
+        except OSError as error:
+            logger.info("api %s %s -> unreachable: %s", method, path, error)
+            raise ApiUnreachable(str(error)) from error
+        logger.debug(
+            "api %s %s -> 200 (%.0f ms)",
+            method, path, (time.perf_counter() - started) * 1000,
+        )
+        return payload
 
     # --- reads (polling) -------------------------------------------------
 
@@ -293,34 +365,48 @@ class ApiClient:
         return self._request("GET", "/assistant/status")
 
     def assistant_plan(self, text: str) -> dict:
-        return self._request("POST", "/assistant/plan", {"text": text})
+        # Reaches the provider when one is configured.
+        return self._request(
+            "POST", "/assistant/plan", {"text": text},
+            timeout=AI_REQUEST_TIMEOUT_SECONDS,
+        )
 
     def assistant_explain_day(self) -> dict:
-        return self._request("POST", "/assistant/explain-day", {})
+        return self._request(
+            "POST", "/assistant/explain-day", {},
+            timeout=AI_REQUEST_TIMEOUT_SECONDS,
+        )
 
     # --- intelligence layer (setup + settings) ------------------------------
 
     def assistant_setup(self) -> dict:
         """Hardware, model recommendations, Ollama state — one call."""
-        return self._request("GET", "/assistant/setup")
+        return self._request(
+            "GET", "/assistant/setup", timeout=PROBE_TIMEOUT_SECONDS
+        )
 
     def assistant_ollama(self) -> dict:
-        return self._request("GET", "/assistant/ollama")
+        return self._request(
+            "GET", "/assistant/ollama", timeout=PROBE_TIMEOUT_SECONDS
+        )
 
     def assistant_ollama_pull(self, model: str) -> dict:
         return self._request(
-            "POST", "/assistant/ollama/pull", {"model": model}
+            "POST", "/assistant/ollama/pull", {"model": model},
+            timeout=PROBE_TIMEOUT_SECONDS,
         )
 
     def assistant_ollama_remove(self, model: str) -> dict:
         return self._request(
-            "POST", "/assistant/ollama/remove", {"model": model}
+            "POST", "/assistant/ollama/remove", {"model": model},
+            timeout=PROBE_TIMEOUT_SECONDS,
         )
 
     def assistant_ollama_show(self, model: str) -> dict:
         """Context length, parameter size and quantization for a model."""
         return self._request(
-            "POST", "/assistant/ollama/show", {"model": model}
+            "POST", "/assistant/ollama/show", {"model": model},
+            timeout=PROBE_TIMEOUT_SECONDS,
         )
 
     def assistant_config(self) -> dict:
@@ -337,10 +423,24 @@ class ApiClient:
             body["model"] = model
         if api_key:
             body["api_key"] = api_key
-        return self._request("PUT", "/assistant/config", body)
+        # Applying a provider recomposes the assistant server-side, which
+        # probes the provider — slower than a plain read.
+        return self._request(
+            "PUT", "/assistant/config", body,
+            timeout=PROBE_TIMEOUT_SECONDS,
+        )
 
     def assistant_test(self) -> dict:
-        return self._request("POST", "/assistant/test", {})
+        """One real round trip through the configured provider.
+
+        A 7B model on CPU answers in tens of seconds, so this deliberately
+        does NOT use the client's short polling deadline — giving up after
+        2 s and calling the result "Offline" was the bug, not the cure.
+        """
+        return self._request(
+            "POST", "/assistant/test", {},
+            timeout=AI_REQUEST_TIMEOUT_SECONDS,
+        )
 
     # --- networking (M21: the Networking page) ------------------------------
 

@@ -492,5 +492,33 @@ void main() {
       expect(bare.baseUrl, 'http://192.168.1.15:8765');
       bare.close();
     });
+
+    test('a timed-out request is ApiTimeout, a subtype of unreachable',
+        () async {
+      // A server that accepts the connection but never answers is a
+      // different fact from an unreachable one — and the fact an AI
+      // round trip produces. It must still satisfy the offline path.
+      final slow = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      slow.listen((_) {}); // accept, never respond
+      final client = ApiClient('http://127.0.0.1:${slow.port}',
+          timeout: const Duration(milliseconds: 200));
+      try {
+        await client.getDashboard();
+        fail('expected a timeout');
+      } on ApiTimeoutException catch (error) {
+        expect(error, isA<ApiUnreachableException>());
+        expect(error.waited, const Duration(milliseconds: 200));
+      }
+      client.close();
+      await slow.close(force: true);
+    });
+
+    test('normalizeUrl trims, drops trailing slashes and adds the scheme',
+        () {
+      expect(ApiClient.normalizeUrl('  192.168.1.15:8765/  '),
+          'http://192.168.1.15:8765');
+      expect(ApiClient.normalizeUrl('https://relay.example.com/'),
+          'https://relay.example.com');
+    });
   });
 }

@@ -30,8 +30,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from paios_gui.client import ApiResponseError, ApiUnreachable
+from paios_gui.client import ApiResponseError, ApiTimeout, ApiUnreachable
 from paios_gui.theme import ACCENT, BAD, GOOD, TEXT_DIM, WARN
+
+#: Seconds between full Intelligence refreshes. The page is refreshed by
+#: the window's poll timer (every few seconds), but one refresh costs
+#: four backend calls, three of which make the backend probe the local
+#: Ollama server. At poll cadence that is a permanent load on a server
+#: whose domain work is serialized — and it ran on the UI thread. The
+#: facts here (installed models, hardware) change on a human timescale.
+_REFRESH_INTERVAL_SECONDS = 30.0
 
 #: UI label -> provider the backend understands. "Automatic" is a
 #: convenience resolved on the client (Local AI when Ollama is up,
@@ -57,6 +65,8 @@ class IntelligencePage(QWidget):
         self._recommended_model: str | None = None
         self._ollama_running = False
         self._available = False
+        #: Monotonic stamp of the last full refresh (0 = never).
+        self._last_refresh = 0.0
 
         outer = QVBoxLayout(self)
         heading = QLabel("INTELLIGENCE")
@@ -193,8 +203,17 @@ class IntelligencePage(QWidget):
 
     # --- data ------------------------------------------------------------
 
-    def refresh(self, client) -> None:
-        """Fetch config + Ollama + hardware; repaint. Never raises."""
+    def refresh(self, client, force: bool = False) -> None:
+        """Fetch config + Ollama + hardware; repaint. Never raises.
+
+        Throttled: the window calls this on every poll tick, but one pass
+        is four backend calls that probe Ollama. ``force=True`` is the
+        user asking (an applied mode, a finished download).
+        """
+        now = time.monotonic()
+        if not force and now - self._last_refresh < _REFRESH_INTERVAL_SECONDS:
+            return
+        self._last_refresh = now
         try:
             config = client.assistant_config()
             ollama = client.assistant_ollama()
@@ -413,6 +432,7 @@ class IntelligencePage(QWidget):
 
         def call():
             result = self._window.client.assistant_ollama_pull(model)
+            self._last_refresh = 0.0  # show the new state at once
             if not result.get("started"):
                 raise ApiResponseError(
                     400, "Ollama", result.get("reason", "download failed")
@@ -429,6 +449,9 @@ class IntelligencePage(QWidget):
             result = self._window.client.set_assistant_config(
                 provider, model=model, api_key=api_key
             )
+            # The user just changed the provider: the throttle must not
+            # hold the status light on the previous answer.
+            self._last_refresh = 0.0
             if result.get("warning"):
                 self._window.notify(result["warning"], "warn")
 
@@ -439,33 +462,97 @@ class IntelligencePage(QWidget):
         self._window.run_action(call, label)
 
     def _on_test(self) -> None:
+        """Test the whole chain — desktop backend, then provider —
+        naming the link that broke.
+
+        Two calls, not one: the backend is probed first (fast), then the
+        provider (slow, with the AI deadline). Before, a single 2 s call
+        covered both and every failure read "Offline". Each stage repaints
+        before it blocks (``processEvents``), so the user sees "Connecting
+        …" and "Asking the AI…" rather than a frozen button. The provider
+        call is a deliberate, user-initiated wait — the poll loop that
+        must stay responsive never runs this path.
+        """
         self.test_button.setEnabled(False)
         self.latency_label.hide()
+        client = self._window.client
         started = time.perf_counter()
         try:
-            result = self._window.client.assistant_test()
-        except ApiUnreachable as error:
-            self.test_output.setText(f"Offline: {error}")
+            self._stage("Testing the PAIOS backend…")
+            client.get_status()
+            self._stage("Backend is up. Asking the AI to answer"
+                        " (the first reply can take a minute)…")
+            result = client.assistant_test()
+        except (ApiUnreachable, ApiResponseError) as error:
+            self._show_latency(self._elapsed_ms(started), BAD)
+            self.test_output.setText(self.explain_failure(error))
             self.test_button.setEnabled(True)
             return
-        except ApiResponseError as error:
-            self.test_output.setText(f"Server error: {error}")
-            self.test_button.setEnabled(True)
-            return
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        ok = result.get("ok")
-        color = GOOD if ok else BAD
-        self.latency_label.setStyleSheet(f"background:{color}; color:#14161a;")
-        self.latency_label.setText(f"{elapsed_ms} ms")
-        self.latency_label.show()
+        self._show_test_result(result, self._elapsed_ms(started))
+        self.test_button.setEnabled(True)
+
+    def _stage(self, message: str) -> None:
+        """Show a step and paint it before the next blocking call.
+
+        A targeted repaint(), not processEvents(): it redraws this label
+        synchronously without re-entering the event loop, so it cannot
+        flush a deferred widget deletion mid-call."""
+        self.test_output.setText(message)
+        self.test_output.repaint()
+
+    @staticmethod
+    def _elapsed_ms(started: float) -> int:
+        return int((time.perf_counter() - started) * 1000)
+
+    def _show_test_result(self, result: dict, elapsed_ms: int) -> None:
+        ok = bool(result.get("ok"))
+        self._show_latency(elapsed_ms, GOOD if ok else BAD)
         source = result.get("source")
         prefix = (
             "Deterministic engine"
             if source == "heuristic"
             else f"Model ({result.get('adapter', 'llm')})"
         )
-        self.test_output.setText(f"{prefix}: {result.get('answer', '')}")
-        self.test_button.setEnabled(True)
+        answer = result.get("answer", "")
+        if ok:
+            self.test_output.setText(f"Connected — {prefix}: {answer}")
+        else:
+            # The backend answered; the PROVIDER did not. Say so, with
+            # the provider's own words — never "Offline".
+            self.test_output.setText(
+                f"Backend is reachable, but the AI did not answer. {answer}"
+            )
+
+    @staticmethod
+    def explain_failure(error) -> str:
+        """The one place a failed AI test becomes words.
+
+        Each branch names a different fact. Collapsing them into
+        "Offline" is what made a healthy backend look unreachable.
+        """
+        if isinstance(error, ApiTimeout):
+            return (
+                f"The backend accepted the request but sent no answer"
+                f" within {error.seconds:g}s. The model is probably still"
+                " loading — large models take minutes on the first run."
+                " Try again, or pick a smaller model."
+            )
+        if isinstance(error, ApiUnreachable):
+            return (
+                f"Could not reach the PAIOS backend: {error}. Start it on"
+                " the Networking page, then test again."
+            )
+        if isinstance(error, ApiResponseError):
+            return (
+                f"The backend refused the request (HTTP {error.status},"
+                f" {error.error_type}): {error}"
+            )
+        return f"Unexpected failure: {type(error).__name__}: {error}"
+
+    def _show_latency(self, elapsed_ms: int, color: str) -> None:
+        self.latency_label.setStyleSheet(f"background:{color}; color:#14161a;")
+        self.latency_label.setText(f"{elapsed_ms} ms")
+        self.latency_label.show()
 
     # --- helpers ---------------------------------------------------------
 
