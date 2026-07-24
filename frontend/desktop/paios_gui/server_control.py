@@ -18,6 +18,7 @@ child) and reports it as externally managed rather than starting a
 second, conflicting server.
 """
 
+import os
 import subprocess
 import sys
 
@@ -57,12 +58,16 @@ def default_spawner(command: list[str]):
         creation_flags = (
             subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         )
+    env = os.environ.copy()
+    if "PYTHONPATH" not in env or not env["PYTHONPATH"]:
+        env["PYTHONPATH"] = os.pathsep.join(sys.path)
     return subprocess.Popen(
         command,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
         creationflags=creation_flags,
+        env=env,
     )
 
 

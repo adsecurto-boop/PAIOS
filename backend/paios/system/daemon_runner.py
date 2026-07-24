@@ -175,6 +175,9 @@ def start_background(config: SystemConfig) -> str:
         creation_flags = (
             subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
         )
+    env = os.environ.copy()
+    if "PYTHONPATH" not in env or not env["PYTHONPATH"]:
+        env["PYTHONPATH"] = os.pathsep.join(sys.path)
     with open(log_path, "ab") as sink:
         process = subprocess.Popen(
             command,
@@ -182,6 +185,7 @@ def start_background(config: SystemConfig) -> str:
             stderr=sink,
             stdin=subprocess.DEVNULL,
             creationflags=creation_flags,
+            env=env,
         )
     pid_file(config).write_text(str(process.pid), encoding="utf-8")
     return f"Daemon started in the background (pid {process.pid})."

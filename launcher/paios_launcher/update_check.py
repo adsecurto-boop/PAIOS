@@ -120,8 +120,16 @@ def launch_updater(install_root: Path) -> bool:
     else:
         command = [sys.executable, "-m", "paios_updater", "--yes"]
     creation_flags = 0x00000008 if os.name == "nt" else 0  # DETACHED_PROCESS
+    env = os.environ.copy()
+    if "PYTHONPATH" not in env or not env["PYTHONPATH"]:
+        env["PYTHONPATH"] = os.pathsep.join(sys.path)
     try:
-        subprocess.Popen(command, creationflags=creation_flags, close_fds=True)
+        subprocess.Popen(
+            command,
+            creationflags=creation_flags,
+            close_fds=True,
+            env=env,
+        )
         return True
     except OSError as error:
         logger.error("cannot launch updater: %s", error)
