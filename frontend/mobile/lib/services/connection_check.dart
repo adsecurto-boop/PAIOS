@@ -78,16 +78,15 @@ Future<ConnectionReport> checkConnection(
     if (!operational) return ConnectionReport(steps);
   } on ApiTimeoutException catch (error) {
     steps.add(CheckStep('Desktop', CheckStatus.failed,
-        'reached ${client.baseUrl} but got no reply in'
-        ' ${error.waited.inSeconds}s'));
+        'Desktop is reachable but the request timed out in ${error.waited.inSeconds}s'));
     return ConnectionReport(steps);
   } on ApiUnreachableException catch (error) {
     steps.add(CheckStep('Desktop', CheckStatus.failed,
-        'could not reach ${client.baseUrl} — ${error.detail}'));
+        'Desktop did not answer'));
     return ConnectionReport(steps);
   } on ApiResponseException catch (error) {
     steps.add(CheckStep('Desktop', CheckStatus.failed,
-        'answered HTTP ${error.status} (${error.errorType}):'
+        'answered HTTP ${error.status} (${error.errorType}):' +
         ' ${error.message}'));
     return ConnectionReport(steps);
   }
