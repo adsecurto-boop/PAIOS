@@ -13,6 +13,24 @@ class TestLayout:
         assert "PAIOS DASHBOARD" in lines[1]
         assert len(lines[1]) == 57
 
+    def test_banner_various_widths(self):
+        for width in [0, -5, 5, 10, 15, 30, 80, 120]:
+            lines = layout.banner(width)
+            assert len(lines) == 3
+            expected_width = max(0, width)
+            assert lines[0] == "=" * expected_width
+            assert lines[2] == "=" * expected_width
+            # layout.banner centers layout.TITLE. Python's str.center(width) behaves as:
+            # if width <= len(self), returns self as is. Otherwise centers it.
+            # So len(lines[1]) should be max(len(layout.TITLE), expected_width)
+            expected_len = max(len(layout.TITLE), expected_width)
+            assert len(lines[1]) == expected_len
+            if expected_width >= len(layout.TITLE):
+                assert layout.TITLE in lines[1]
+                # Check that it's centered
+                left_padding = (expected_width - len(layout.TITLE)) // 2
+                assert lines[1].startswith(" " * left_padding)
+
     def test_clip_never_exceeds_width(self):
         assert layout.clip("x" * 100, 57).endswith("...")
         assert len(layout.clip("x" * 100, 57)) == 57
