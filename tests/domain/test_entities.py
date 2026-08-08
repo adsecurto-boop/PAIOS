@@ -271,3 +271,31 @@ class TestGoal:
         assert goal.accepted_by_user
         assert goal.accepted_at == at(1)
         assert goal.status is GoalStatus.ACTIVE
+
+    def test_goal_requires_name(self):
+        with pytest.raises(DomainValidationError):
+            Goal(
+                goal_id=GoalId("goal_002"),
+                user_id=USER,
+                name="",
+                description="Goal with no name",
+            )
+
+        with pytest.raises(DomainValidationError):
+            Goal(
+                goal_id=GoalId("goal_003"),
+                user_id=USER,
+                name="   ",
+                description="Goal with whitespace name",
+            )
+
+    def test_change_status(self):
+        goal = Goal(
+            goal_id=GoalId("goal_004"),
+            user_id=USER,
+            name="Achieve peace",
+            description="A noble goal",
+        )
+        assert goal.status is GoalStatus.ACTIVE
+        goal.change_status(GoalStatus.COMPLETED)
+        assert goal.status is GoalStatus.COMPLETED
