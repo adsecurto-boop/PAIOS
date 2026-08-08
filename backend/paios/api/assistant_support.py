@@ -1,13 +1,13 @@
 """Assistant composition and offline fallbacks for the REST layer (M20).
+Adapter construction happens here (transport concern), never inside the assistant
+package.
 
-Adapter construction happens here (transport concern), never inside the
-assistant package. Two rules hold everywhere in this module:
-
-    1. Nothing here creates, mutates, or schedules — outputs are
-       proposals and explanations the user acts on through ordinary
-       endpoints. The Scheduler stays the only scheduling authority.
-    2. Every operation has a deterministic offline path, so the
-       Planning Workspace works with no SDK, no key, no network.
+Two rules hold everywhere in this module:
+1. Nothing here creates, mutates, or schedules — outputs are proposals and
+explanations the user acts on through ordinary endpoints. The Scheduler stays the
+only scheduling authority.
+2. Every operation has a deterministic offline path, so the Planning Workspace
+works with no SDK, no key, no network.
 """
 
 import datetime
@@ -110,7 +110,8 @@ def _construct(
     data_dir: str | None = None,
 ) -> AssistantOrchestrator | None:
     """The one construction path; raises AdapterError when the chosen
-    provider's SDK, key or server is absent, returns None for "none"."""
+    provider's SDK, key or server is absent, returns None for "none".
+    """
     if provider == "none":
         return None
 
@@ -202,7 +203,8 @@ def build_orchestrator(
     data_dir: str | None = None,
 ) -> AssistantOrchestrator | None:
     """None when provider is "none" or its SDK/key is absent — callers
-    fall back to the deterministic path."""
+    fall back to the deterministic path.
+    """
     model = os.environ.get("PAIOS_AI_MODEL", model or None) or None
     try:
         return _construct(provider, model, data_dir=data_dir)
@@ -217,11 +219,12 @@ def compose_assistant(
     data_dir: str | None = None,
 ) -> tuple[str, AssistantOrchestrator | None, str]:
     """(provider, orchestrator-or-None, human-readable reason).
-
-    The reason states why the assistant is (un)available in words a
-    user can act on — it feeds startup logs and /assistant/status."""
+    The reason states why the assistant is (un)available in words a user
+    can act on — it feeds startup logs and /assistant/status.
+    """
     provider = resolve_provider(config_provider)
     model = os.environ.get("PAIOS_AI_MODEL", config_model or None) or None
+
     if provider == "none":
         return (
             provider,
@@ -256,7 +259,8 @@ def heuristic_proposal_payload(
     existing_events: tuple[str, ...],
 ) -> dict:
     """The offline Planning Proposal: classifier output in the same JSON
-    shape the LLM path produces, marked ``source: "heuristic"``."""
+    shape the LLM path produces, marked ``source: "heuristic"``.
+    """
     classified = classify_lines(
         text, existing_goals, existing_projects, existing_events
     )
@@ -343,8 +347,9 @@ def _completed_on(events, day: str) -> list:
 def heuristic_morning_payload(
     app, planning, check_in: dict, today: str
 ) -> dict:
-    """Morning briefing without a model: the Scheduler's plan entries,
-    top priorities, and mechanically detected risks."""
+    """Morning briefing without a model: the Scheduler's plan entries, top
+    priorities, and mechanically detected risks.
+    """
     entries = deterministic_day_reasons(app, planning)
     # Priority-tagged entries first (the Scheduler already ordered the
     # rest); the top three become the day's named priorities.
@@ -353,6 +358,7 @@ def heuristic_morning_payload(
         for entry in entries
         if "priority" in entry["reason"]
     ][:3] or [entry["title"] for entry in entries[:3]]
+
     risks = []
     energy = str(check_in.get("energy") or "").lower()
     if len(entries) > 8:
@@ -371,15 +377,19 @@ def heuristic_morning_payload(
                 + ", ".join(high_energy)
             )
     deadlines = [
-        entry["title"] for entry in entries if "deadline" in entry["reason"]
+        entry["title"]
+        for entry in entries
+        if "deadline" in entry["reason"]
     ]
     if deadlines:
         risks.append("deadline-bound today: " + ", ".join(deadlines))
+
     sleep = check_in.get("sleep_hours")
     if isinstance(sleep, (int, float)) and sleep and sleep < 6:
         risks.append(
             f"only {sleep:g}h sleep reported — consider protecting breaks"
         )
+
     answer = (
         f"Plan for {today}: {len(entries)} scheduled entr"
         f"{'y' if len(entries) == 1 else 'ies'}."
@@ -397,8 +407,9 @@ def heuristic_morning_payload(
 
 
 def heuristic_evening_payload(app, check_in: dict, today: str) -> dict:
-    """Evening review without a model: completed vs open, plus the
-    user's own notes echoed into a factual summary."""
+    """Evening review without a model: completed vs open, plus the user's
+    own notes echoed into a factual summary.
+    """
     events = list(app.list_events())
     completed = _completed_on(events, today)
     open_events = [
@@ -407,6 +418,7 @@ def heuristic_evening_payload(app, check_in: dict, today: str) -> dict:
         if _event_status(event)
         in ("Scheduled", "Ready", "Started", "Resumed", "Paused")
     ]
+
     improvements = []
     if open_events and completed:
         improvements.append(
@@ -418,6 +430,7 @@ def heuristic_evening_payload(app, check_in: dict, today: str) -> dict:
             "no completions were recorded today — if work happened,"
             " recording outcomes keeps the learning data honest"
         )
+
     plan = app.plan()
     tomorrow = []
     if plan is not None:
@@ -427,6 +440,7 @@ def heuristic_evening_payload(app, check_in: dict, today: str) -> dict:
                 event = events_by_id.get(str(entry.event_id))
                 if event is not None:
                     tomorrow.append(event.description)
+
     return {
         "source": "heuristic",
         "answer": (
@@ -446,8 +460,9 @@ def heuristic_evening_payload(app, check_in: dict, today: str) -> dict:
 
 
 def heuristic_weekly_payload(app, week_days: list[str]) -> dict:
-    """Weekly review without a model: per-day completion counts and
-    open goal/project tallies — trends as plain arithmetic."""
+    """Weekly review without a model: per-day completion counts and open
+    goal/project tallies — trends as plain arithmetic.
+    """
     events = list(app.list_events())
     per_day = {
         day: len(_completed_on(events, day)) for day in week_days
@@ -455,8 +470,10 @@ def heuristic_weekly_payload(app, week_days: list[str]) -> dict:
     total = sum(per_day.values())
     goals = list(app.list_goals())
     projects = list(app.list_projects())
+
     best_day = max(per_day, key=per_day.get) if per_day else None
     bullets = [f"{day}: {count} completed" for day, count in per_day.items()]
+
     return {
         "source": "heuristic",
         "answer": (
@@ -476,17 +493,20 @@ def heuristic_weekly_payload(app, week_days: list[str]) -> dict:
 
 
 def deterministic_day_reasons(app, planning) -> list[dict]:
-    """One grounded WHY per plan entry, from recorded facts only:
-    the intent/recommendation reason, priority, deadline, energy and
-    dependencies. Verbalizes what the Scheduler and Decision Engine
-    already decided — proposes nothing."""
+    """One grounded WHY per plan entry, from recorded facts only: the
+    intent/recommendation reason, priority, deadline, energy and dependencies.
+    Verbalizes what the Scheduler and Decision Engine already decided —
+    proposes nothing.
+    """
     plan = app.plan()
     if plan is None:
         return []
+
     events = {str(event.event_id): event for event in app.list_events()}
     recommendations = {
         str(r.recommendation_id): r for r in app.active_recommendations()
     }
+
     entries = []
     for entry in plan.entries:
         event = events.get(str(entry.event_id))
@@ -498,6 +518,7 @@ def deterministic_day_reasons(app, planning) -> list[dict]:
                 else None
             ),
         ) or {}
+
         reasons = []
         recommendation = (
             recommendations.get(str(entry.recommendation_id))
@@ -516,6 +537,7 @@ def deterministic_day_reasons(app, planning) -> list[dict]:
             reasons.append(
                 "ordered after: " + ", ".join(sidecar["depends_on"])
             )
+
         entries.append(
             {
                 "event_id": str(entry.event_id),
