@@ -118,6 +118,19 @@ class TestGoalOperations:
 
 
 class TestProjectOperations:
+    def test_list_projects(self, started_app):
+        # The seeded scenario has no projects by default, start clean
+        initial_projects = started_app.list_projects()
+
+        project1 = started_app.add_project(USER, "Project Alpha", "First project")
+        project2 = started_app.add_project(USER, "Project Beta", "Second project")
+
+        all_projects = started_app.list_projects()
+
+        assert len(all_projects) == len(initial_projects) + 2
+        assert project1 in all_projects
+        assert project2 in all_projects
+
     def test_add_creates_and_attaches_progress(self, started_app):
         project = started_app.add_project(USER, "PAIOS", "Build it")
         assert project.progress_id is not None
@@ -280,6 +293,15 @@ class TestKnowledgeOperations:
     def test_unknown_knowledge_rejected(self, started_app):
         with pytest.raises(EntityNotFound):
             started_app.revise_knowledge(KnowledgeId("missing"))
+
+
+class TestEventOperations:
+    def test_list_events(self, started_app):
+        assert started_app.list_events() == []
+        event = complete_one_event(started_app)
+        events = started_app.list_events()
+        assert len(events) == 1
+        assert events[0].event_id == event.event_id
 
 
 class TestReflectionOperations:

@@ -597,7 +597,7 @@ class ApiRouter:
                     " stored."
                 )
         ai_settings.save(ai_dir, {"provider": provider, "model": model})
-        stored_key = ai_settings.api_key_for(ai_dir, provider)
+        stored_key = ai_settings.api_key_for(ai_dir, provider) or api_key
         (
             self._assistant_provider,
             self._assistant,
