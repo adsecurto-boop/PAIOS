@@ -282,6 +282,15 @@ class TestKnowledgeOperations:
             started_app.revise_knowledge(KnowledgeId("missing"))
 
 
+class TestEventOperations:
+    def test_list_events(self, started_app):
+        assert started_app.list_events() == []
+        event = complete_one_event(started_app)
+        events = started_app.list_events()
+        assert len(events) == 1
+        assert events[0].event_id == event.event_id
+
+
 class TestReflectionOperations:
     def test_reflection_on_completed_event_links_both_ways(self, started_app):
         event = complete_one_event(started_app)
