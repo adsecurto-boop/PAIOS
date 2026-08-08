@@ -172,3 +172,48 @@ def test_cost_calculation():
     assert calculate_cost("anthropic:claude-3-5-sonnet", 1000, 2000) == pytest.approx(0.033) # 1000*3/1M + 2000*15/1M
     # Ollama
     assert calculate_cost("ollama:qwen2.5:7b", 1000, 2000) == 0.0
+
+
+def test_provider_manager_fallback_model_leakage_and_unresolved():
+    # 1. Unresolved provider fallback
+    probe_transport = FakeTransport(reply={"version": "1.0"})
+    ollama = OllamaProvider(transport=probe_transport)
+    # Set Ollama's complete transport to return success, and set its model to something else
+    ollama._model = "different-model"
+    ollama._transport = FakeTransport(reply={"message": {"content": "Ollama success text"}})
+
+    # Create ProviderManager with no "gemini" provider, but "gemini" as active
+    manager = ProviderManager(
+        active_provider_name="gemini",
+        providers={"ollama": ollama},
+        fallback_chain=["ollama"]
+    )
+
+    req = AssistantRequest(
+        task=AssistantTask.ANSWER_QUESTION,
+        template_name="t",
+        system_prompt="sys",
+        user_prompt="usr"
+    )
+
+    res = manager.complete(req)
+    assert res == "Ollama success text"
+    # Overridden with default local model on fallback
+    assert ollama._model == "qwen2.5:7b"
+
+    # 2. Resolved provider fallback model leakage
+    gemini = GeminiProvider(api_key="test-key", transport=FakeTransport(error=AdapterError("Gemini failed")))
+    ollama2 = OllamaProvider(transport=probe_transport)
+    ollama2._model = "gemini-1.5-flash"
+    ollama2._transport = FakeTransport(reply={"message": {"content": "Ollama fallback text"}})
+
+    manager2 = ProviderManager(
+        active_provider_name="gemini",
+        providers={"gemini": gemini, "ollama": ollama2},
+        fallback_chain=["ollama"]
+    )
+
+    res2 = manager2.complete(req)
+    assert res2 == "Ollama fallback text"
+    # Model should have been overridden to default
+    assert ollama2._model == "qwen2.5:7b"
