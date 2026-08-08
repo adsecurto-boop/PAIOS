@@ -665,3 +665,88 @@ def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch
     with pytest.raises(AdapterError) as excinfo:
         assistant.answer_question("test prompt")
     assert "Gemini request failed" in str(excinfo.value)
+
+
+def test_gemini_fallback_with_missing_dpapi(api_app, tmp_path, monkeypatch):
+    # Simulate non-Windows environment where DPAPI fails/returns None
+    monkeypatch.setattr(
+        "paios.api.ai_settings.protect_key", lambda x: None
+    )
+    monkeypatch.setattr(
+        "paios.api.ai_settings.unprotect_key", lambda x: None
+    )
+
+    # Mock Gemini transport to succeed
+    def fake_gemini_transport(url, payload, headers, timeout):
+        if "generateContent" in url:
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": '{"answer": "Hi, I am Gemini.", "bullets": [], "confidence": 1.0}'
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        return {}
+
+    monkeypatch.setattr(
+        "paios.assistant.adapters.gemini.default_transport",
+        fake_gemini_transport
+    )
+    monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    ai_dir = tmp_path / "ai-data"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+
+    # Build router (no assistant active initially)
+    router = ApiRouter(
+        api_app,
+        planning=PlanningService(tmp_path / "planning-data"),
+        backups=BackupManager(tmp_path / "data", tmp_path / "backups"),
+        assistant=None,
+        assistant_provider="none",
+        ai_dir=ai_dir,
+    )
+
+    # 1. Put config with api_key. Since protect_key is mocked to return None,
+    # store_api_key will fail to store it, but the live recomposed assistant
+    # should still succeed because it falls back to using the provided api_key!
+    put_payload = ok(
+        router, "PUT", "/assistant/config",
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+            "api_key": "my-secret-gemini-key"
+        }
+    )
+    # It should show available because the live composition succeeded with the supplied api_key
+    assert put_payload["available"] is True
+    assert put_payload["provider"] == "gemini"
+    assert "warning" in put_payload  # contains the warning about secure key storage being unavailable
+
+    # Test the connection live - it should succeed using the supplied key
+    test_payload = ok(router, "POST", "/assistant/test", {})
+    assert test_payload["ok"] is True
+    assert test_payload["adapter"] == "gemini:gemini-2.5-pro"
+
+    # 2. Verify environment fallback on startup when no key is in settings.
+    # Set the environment variable fallback.
+    monkeypatch.setenv("GEMINI_API_KEY", "env-secret-key")
+
+    # Try composing without passing a key explicitly.
+    # It should fall back to GEMINI_API_KEY and succeed!
+    restored_provider, restored_assistant, restored_reason = assistant_support.compose_assistant(
+        "gemini",
+        "gemini-2.5-pro",
+        api_key=None,
+        data_dir=ai_dir,
+    )
+    assert restored_provider == "gemini"
+    assert restored_assistant is not None
+    assert "gemini adapter ready" in restored_reason.lower()
