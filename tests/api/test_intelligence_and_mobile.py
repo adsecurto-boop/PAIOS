@@ -1,16 +1,13 @@
-"""The intelligence layer and the mobile companion API.
-
-Covers: AI settings persistence + live recomposition, hardware-driven
-model recommendation, the daily-rhythm workflows in BOTH paths (LLM via
-the null adapter, deterministic without one), and the /mobile namespace
-(pairing, token auth, loopback-only administration, offline-queue
-idempotency). No network anywhere.
+"""The intelligence layer and the mobile companion API. Covers:
+AI settings persistence + live recomposition, hardware-driven model recommendation,
+the daily-rhythm workflows in BOTH paths (LLM via the null adapter, deterministic without one),
+and the /mobile namespace (pairing, token auth, loopback-only administration, offline-queue idempotency).
+No network anywhere.
 """
 
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
-
 import pytest
 
 from paios.api import ai_settings, assistant_support, ollama_support
@@ -59,7 +56,6 @@ def ok(router, method, path, body=None, expect=200, **context):
 
 # --- hardware + model recommendation ----------------------------------------
 
-
 class TestModelRecommendation:
     def test_8gb_machine_gets_small_models(self):
         choices = hardware.recommend_models(8.0)
@@ -90,9 +86,7 @@ class TestModelRecommendation:
     def test_exactly_one_recommendation_always(self):
         for ram in (4, 8, 12, 16, 24, 32, 64):
             recommended = [
-                c
-                for c in hardware.recommend_models(float(ram))
-                if c.recommended
+                c for c in hardware.recommend_models(float(ram)) if c.recommended
             ]
             assert len(recommended) == 1, f"ram={ram}"
 
@@ -135,13 +129,11 @@ class TestModelRecommendation:
 
         hardware._reset_gpu_cache()
         hardware.detect_gpu(runner=fake_runner, force_refresh=True)
-
         assert seen["creationflags"] & subprocess.CREATE_NO_WINDOW
         assert seen["startupinfo"].wShowWindow == subprocess.SW_HIDE
 
 
 # --- AI settings + config endpoint ------------------------------------------
-
 
 class TestAiSettings:
     def test_save_and_load_roundtrip(self, tmp_path):
@@ -166,12 +158,16 @@ class TestAiSettings:
         monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
         before = ok(offline_router, "GET", "/assistant/status")
         assert before["available"] is False
+
         after = ok(
-            offline_router, "PUT", "/assistant/config",
+            offline_router,
+            "PUT",
+            "/assistant/config",
             {"provider": "null"},
         )
         assert after["available"] is True
         assert after["provider"] == "null"
+
         # And the plain status endpoint agrees without a restart.
         assert ok(offline_router, "GET", "/assistant/status")[
             "available"
@@ -194,6 +190,7 @@ class TestAiSettings:
     ):
         offline = ok(offline_router, "POST", "/assistant/test", {})
         assert offline["source"] == "heuristic" and offline["ok"] is True
+
         online = ok(ai_router, "POST", "/assistant/test", {})
         assert online["source"] == "llm" and online["ok"] is True
         assert online["adapter"] == "null"
@@ -201,11 +198,12 @@ class TestAiSettings:
 
 # --- daily-rhythm workflows ---------------------------------------------------
 
-
 class TestDailyRhythm:
     def test_morning_plan_heuristic_shape(self, offline_router):
         payload = ok(
-            offline_router, "POST", "/assistant/morning-plan",
+            offline_router,
+            "POST",
+            "/assistant/morning-plan",
             {"sleep_hours": 5, "energy": "low"},
         )
         assert payload["source"] == "heuristic"
@@ -217,7 +215,9 @@ class TestDailyRhythm:
         self, ai_router
     ):
         payload = ok(
-            ai_router, "POST", "/assistant/morning-plan",
+            ai_router,
+            "POST",
+            "/assistant/morning-plan",
             {"mood": "good"},
         )
         assert payload["source"] == "llm"
@@ -226,7 +226,9 @@ class TestDailyRhythm:
 
     def test_evening_review_heuristic_counts_today(self, offline_router):
         payload = ok(
-            offline_router, "POST", "/assistant/evening-review",
+            offline_router,
+            "POST",
+            "/assistant/evening-review",
             {"notes": "long day"},
         )
         assert payload["source"] == "heuristic"
@@ -246,11 +248,12 @@ class TestDailyRhythm:
 
 # --- mobile pairing + auth ----------------------------------------------------
 
-
 def pair_device(router, name="Pixel Test") -> str:
     started = ok(router, "POST", "/mobile/pairing/start")
     paired = ok(
-        router, "POST", "/mobile/pair",
+        router,
+        "POST",
+        "/mobile/pair",
         {"code": started["code"], "device_name": name},
         expect=201,
     )
@@ -265,7 +268,9 @@ class TestMobilePairing:
     def test_full_pairing_flow_issues_a_working_token(self, offline_router):
         token = pair_device(offline_router)
         payload = ok(
-            offline_router, "GET", "/mobile/timeline",
+            offline_router,
+            "GET",
+            "/mobile/timeline",
             headers=bearer(token),
         )
         assert "entries" in payload and "server_time" in payload
@@ -273,24 +278,33 @@ class TestMobilePairing:
     def test_wrong_code_is_rejected(self, offline_router):
         ok(offline_router, "POST", "/mobile/pairing/start")
         status, _ = offline_router.handle(
-            "POST", "/mobile/pair", {"code": "000000", "device_name": "x"}
+            "POST",
+            "/mobile/pair",
+            {"code": "000000", "device_name": "x"},
         )
         assert status == 401
 
     def test_code_is_single_use(self, offline_router):
         started = ok(offline_router, "POST", "/mobile/pairing/start")
         ok(
-            offline_router, "POST", "/mobile/pair",
-            {"code": started["code"]}, expect=201,
+            offline_router,
+            "POST",
+            "/mobile/pair",
+            {"code": started["code"]},
+            expect=201,
         )
         status, _ = offline_router.handle(
-            "POST", "/mobile/pair", {"code": started["code"]}
+            "POST",
+            "/mobile/pair",
+            {"code": started["code"]},
         )
         assert status == 401
 
     def test_unpaired_requests_are_401(self, offline_router):
         for path in (
-            "/mobile/timeline", "/mobile/tasks", "/mobile/logs",
+            "/mobile/timeline",
+            "/mobile/tasks",
+            "/mobile/logs",
             "/mobile/study",
         ):
             status, _ = offline_router.handle("GET", path)
@@ -298,16 +312,22 @@ class TestMobilePairing:
 
     def test_pairing_admin_is_loopback_only(self, offline_router):
         status, _ = offline_router.handle(
-            "POST", "/mobile/pairing/start", None,
+            "POST",
+            "/mobile/pairing/start",
+            None,
             client_host="192.168.1.50",
         )
         assert status == 403
+
         # The phone-facing half is NOT loopback-restricted.
         started = ok(offline_router, "POST", "/mobile/pairing/start")
         ok(
-            offline_router, "POST", "/mobile/pair",
+            offline_router,
+            "POST",
+            "/mobile/pair",
             {"code": started["code"]},
-            expect=201, client_host="192.168.1.50",
+            expect=201,
+            client_host="192.168.1.50",
         )
 
     def test_tokens_are_stored_hashed(self, offline_router, tmp_path):
@@ -322,22 +342,32 @@ class TestMobilePairing:
         devices = ok(offline_router, "GET", "/mobile/pairing/devices")
         device_id = devices["devices"][0]["device_id"]
         ok(
-            offline_router, "DELETE",
+            offline_router,
+            "DELETE",
             f"/mobile/pairing/devices/{device_id}",
         )
         status, _ = offline_router.handle(
-            "GET", "/mobile/timeline", None, headers=bearer(token)
+            "GET",
+            "/mobile/timeline",
+            None,
+            headers=bearer(token),
         )
         assert status == 401
 
     def test_auth_endpoint_validates_tokens(self, offline_router):
         token = pair_device(offline_router)
         payload = ok(
-            offline_router, "POST", "/mobile/auth", {"token": token}
+            offline_router,
+            "POST",
+            "/mobile/auth",
+            {"token": token},
         )
         assert payload["valid"] is True
+
         status, _ = offline_router.handle(
-            "POST", "/mobile/auth", {"token": "bogus"}
+            "POST",
+            "/mobile/auth",
+            {"token": "bogus"},
         )
         assert status == 401
 
@@ -346,13 +376,20 @@ class TestMobileData:
     def test_tasks_roundtrip(self, offline_router):
         token = pair_device(offline_router)
         created = ok(
-            offline_router, "POST", "/mobile/tasks",
+            offline_router,
+            "POST",
+            "/mobile/tasks",
             {"title": "From the phone"},
-            expect=201, headers=bearer(token),
+            expect=201,
+            headers=bearer(token),
         )
         assert created["materialized"] in (True, False)
+
         events = ok(
-            offline_router, "GET", "/mobile/tasks", headers=bearer(token)
+            offline_router,
+            "GET",
+            "/mobile/tasks",
+            headers=bearer(token),
         )
         titles = [event["description"] for event in events["events"]]
         assert "From the phone" in titles
@@ -365,16 +402,28 @@ class TestMobileData:
             "client_id": "phone-abc-1",
         }
         first = ok(
-            offline_router, "POST", "/mobile/logs", entry,
-            expect=201, headers=bearer(token),
+            offline_router,
+            "POST",
+            "/mobile/logs",
+            entry,
+            expect=201,
+            headers=bearer(token),
         )
         second = ok(
-            offline_router, "POST", "/mobile/logs", entry,
-            expect=201, headers=bearer(token),
+            offline_router,
+            "POST",
+            "/mobile/logs",
+            entry,
+            expect=201,
+            headers=bearer(token),
         )
         assert first["id"] == second["id"]  # duplicate suppressed
+
         entries = ok(
-            offline_router, "GET", "/mobile/logs", headers=bearer(token)
+            offline_router,
+            "GET",
+            "/mobile/logs",
+            headers=bearer(token),
         )["entries"]
         assert len(
             [e for e in entries if e["client_id"] == "phone-abc-1"]
@@ -383,13 +432,18 @@ class TestMobileData:
     def test_logs_filter_by_day_segment(self, offline_router):
         token = pair_device(offline_router)
         record = ok(
-            offline_router, "POST", "/mobile/logs",
+            offline_router,
+            "POST",
+            "/mobile/logs",
             {"kind": "mood", "text": "good"},
-            expect=201, headers=bearer(token),
+            expect=201,
+            headers=bearer(token),
         )
         day = record["day"]
         payload = ok(
-            offline_router, "GET", f"/mobile/logs/{day}",
+            offline_router,
+            "GET",
+            f"/mobile/logs/{day}",
             headers=bearer(token),
         )
         assert all(entry["day"] == day for entry in payload["entries"])
@@ -398,12 +452,18 @@ class TestMobileData:
     def test_study_endpoint_serves_knowledge_and_logs(self, offline_router):
         token = pair_device(offline_router)
         ok(
-            offline_router, "POST", "/mobile/logs",
+            offline_router,
+            "POST",
+            "/mobile/logs",
             {"kind": "study", "text": "reviewed DDD chapter 4"},
-            expect=201, headers=bearer(token),
+            expect=201,
+            headers=bearer(token),
         )
         payload = ok(
-            offline_router, "GET", "/mobile/study", headers=bearer(token)
+            offline_router,
+            "GET",
+            "/mobile/study",
+            headers=bearer(token),
         )
         assert "knowledge" in payload
         assert payload["study_logs"][0]["text"].startswith("reviewed")
@@ -411,23 +471,28 @@ class TestMobileData:
     def test_assistant_query_falls_back_without_ai(self, offline_router):
         token = pair_device(offline_router)
         payload = ok(
-            offline_router, "POST", "/mobile/assistant/query",
-            {"text": "how is my week?"}, headers=bearer(token),
+            offline_router,
+            "POST",
+            "/mobile/assistant/query",
+            {"text": "how is my week?"},
+            headers=bearer(token),
         )
         assert payload["source"] == "heuristic"
 
     def test_assistant_query_uses_llm_when_available(self, ai_router):
         token = pair_device(ai_router)
         payload = ok(
-            ai_router, "POST", "/mobile/assistant/query",
-            {"text": "how is my week?"}, headers=bearer(token),
+            ai_router,
+            "POST",
+            "/mobile/assistant/query",
+            {"text": "how is my week?"},
+            headers=bearer(token),
         )
         assert payload["source"] == "llm"
         assert payload["adapter"] == "null"
 
 
 # --- ollama management (no server, injectable everything) ---------------------
-
 
 class TestOllamaSupport:
     def test_status_reports_not_running_gracefully(self):
@@ -454,7 +519,9 @@ class TestOllamaSupport:
     def test_pull_spawns_detached_download(self, monkeypatch):
         commands = []
         monkeypatch.setattr(
-            ollama_support, "cli_available", lambda which=None: True
+            ollama_support,
+            "cli_available",
+            lambda which=None: True,
         )
         result = ollama_support.start_pull(
             "qwen2.5:7b", spawner=commands.append
@@ -464,7 +531,9 @@ class TestOllamaSupport:
 
     def test_pull_without_cli_explains(self, monkeypatch):
         monkeypatch.setattr(
-            ollama_support, "cli_available", lambda which=None: False
+            ollama_support,
+            "cli_available",
+            lambda which=None: False,
         )
         result = ollama_support.start_pull("qwen2.5:7b")
         assert result["started"] is False
@@ -496,7 +565,7 @@ class TestModelInfo:
             raise OSError("connection refused")
 
         assert ollama_support.model_info("x", transport=dead) == {
-            "available": False
+            "available": False,
         }
 
     def test_show_endpoint_returns_model_info(
@@ -508,7 +577,9 @@ class TestModelInfo:
             lambda model: {"available": True, "context_length": 8192},
         )
         payload = ok(
-            offline_router, "POST", "/assistant/ollama/show",
+            offline_router,
+            "POST",
+            "/assistant/ollama/show",
             {"model": "llama3.1:8b"},
         )
         assert payload["context_length"] == 8192
@@ -520,7 +591,7 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "paios.api.ai_settings.unprotect_key",
-        lambda x: x.replace("dpapi:", "") if x.startswith("dpapi:") else None
+        lambda x: x.replace("dpapi:", "") if x.startswith("dpapi:") else None,
     )
 
     # 1. Mock Gemini transport to succeed
@@ -540,10 +611,10 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
                 ]
             }
         return {}
-    
+
     monkeypatch.setattr(
         "paios.assistant.adapters.gemini.default_transport",
-        fake_gemini_transport
+        fake_gemini_transport,
     )
     monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -563,12 +634,14 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
 
     # 3. Save Gemini provider, model, and API key via PUT config
     put_payload = ok(
-        router1, "PUT", "/assistant/config",
+        router1,
+        "PUT",
+        "/assistant/config",
         {
             "provider": "gemini",
             "model": "gemini-2.5-pro",
-            "api_key": "my-secret-gemini-key"
-        }
+            "api_key": "my-secret-gemini-key",
+        },
     )
     assert put_payload["available"] is True
     assert put_payload["provider"] == "gemini"
@@ -577,7 +650,7 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
     stored = ai_settings.load(ai_dir)
     assert stored.get("provider") == "gemini"
     assert stored.get("model") == "gemini-2.5-pro"
-    
+
     # Verify the key is stored protected and can be retrieved
     stored_key = ai_settings.api_key_for(ai_dir, "gemini")
     assert stored_key == "my-secret-gemini-key"
@@ -586,14 +659,16 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
     provider_default = stored.get("provider")
     model_default = stored.get("model")
     resolved = assistant_support.resolve_provider(provider_default)
-    
-    restored_provider, restored_assistant, restored_reason = assistant_support.compose_assistant(
+    (
+        restored_provider,
+        restored_assistant,
+        restored_reason,
+    ) = assistant_support.compose_assistant(
         provider_default,
         model_default,
         api_key=ai_settings.api_key_for(ai_dir, resolved),
         data_dir=ai_dir,
     )
-
     assert restored_provider == "gemini"
     assert restored_assistant is not None
     assert "gemini adapter ready" in restored_reason.lower()
@@ -627,20 +702,30 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
 
 def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "env-secret-key")
+
     # 1. Mock Gemini transport to succeed
     def fake_gemini_transport(url, payload, headers, timeout):
         if "generateContent" in url:
             return {
-                "candidates": [{"content": {"parts": [{"text": '{"answer": "Hi from env.", "bullets": [], "confidence": 1.0}'}]}}]
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": '{"answer": "Hi from env.", "bullets": [], "confidence": 1.0}'
+                                }
+                            ]
+                        }
+                    }
+                ]
             }
         return {}
 
     monkeypatch.setattr(
         "paios.assistant.adapters.gemini.default_transport",
-        fake_gemini_transport
+        fake_gemini_transport,
     )
     monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
-
     ai_dir = tmp_path / "ai-data"
     ai_dir.mkdir(parents=True, exist_ok=True)
 
@@ -652,14 +737,16 @@ def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeyp
     provider_default = stored.get("provider")
     model_default = stored.get("model")
     resolved = assistant_support.resolve_provider(provider_default)
-
-    restored_provider, restored_assistant, restored_reason = assistant_support.compose_assistant(
+    (
+        restored_provider,
+        restored_assistant,
+        restored_reason,
+    ) = assistant_support.compose_assistant(
         provider_default,
         model_default,
-        api_key=ai_settings.api_key_for(ai_dir, resolved), # This will be None
+        api_key=ai_settings.api_key_for(ai_dir, resolved),  # This will be None
         data_dir=ai_dir,
     )
-
     assert restored_provider == "gemini"
     assert restored_assistant is not None
     assert "gemini adapter ready" in restored_reason.lower()
@@ -668,30 +755,31 @@ def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeyp
 def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch):
     # If Gemini is available but throws an error during complete(), it should NOT fall back to Ollama
     # (even if Ollama is available in providers_map).
-    
     monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+
     # 1. Mock Gemini transport to fail
     def failing_gemini(url, payload, headers, timeout):
+        import urllib.error
         raise urllib.error.HTTPError(url, 500, "Gemini quota exceeded", {}, None)
-        
+
     monkeypatch.setattr(
-        "paios.assistant.adapters.gemini.default_transport",
-        failing_gemini
+        "paios.assistant.adapters.gemini.default_transport", failing_gemini
     )
+
     # Mock Ollama transport to succeed so Ollama is available
     def succeeding_ollama(url, payload, timeout):
         return {"version": "0.1.0"}
+
     monkeypatch.setattr(
-        "paios.assistant.adapters.ollama.default_transport",
-        succeeding_ollama
+        "paios.assistant.adapters.ollama.default_transport", succeeding_ollama
     )
 
     ai_dir = tmp_path / "ai-data"
     ai_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Store key for Gemini so it is available
     ai_settings.store_api_key(ai_dir, "gemini", "my-key")
-    
+
     # Compose assistant
     provider, assistant, reason = assistant_support.compose_assistant(
         "gemini", "gemini-2.5-flash", api_key="my-key", data_dir=ai_dir
@@ -699,9 +787,10 @@ def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch
     assert provider == "gemini"
     assert assistant is not None
     assert "gemini adapter ready" in reason
-    
+
     # Call completion and check that it does NOT fall back to Ollama, but propagates the error!
     from paios.assistant.adapters import AdapterError
+
     with pytest.raises(AdapterError) as excinfo:
         assistant.answer_question("test prompt")
     assert "Gemini request failed" in str(excinfo.value)
@@ -736,7 +825,7 @@ def test_gemini_fallback_with_missing_dpapi(api_app, tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "paios.assistant.adapters.gemini.default_transport",
-        fake_gemini_transport
+        fake_gemini_transport,
     )
     monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -758,13 +847,16 @@ def test_gemini_fallback_with_missing_dpapi(api_app, tmp_path, monkeypatch):
     # store_api_key will fail to store it, but the live recomposed assistant
     # should still succeed because it falls back to using the provided api_key!
     put_payload = ok(
-        router, "PUT", "/assistant/config",
+        router,
+        "PUT",
+        "/assistant/config",
         {
             "provider": "gemini",
             "model": "gemini-2.5-pro",
-            "api_key": "my-secret-gemini-key"
-        }
+            "api_key": "my-secret-gemini-key",
+        },
     )
+
     # It should show available because the live composition succeeded with the supplied api_key
     assert put_payload["available"] is True
     assert put_payload["provider"] == "gemini"
@@ -781,7 +873,11 @@ def test_gemini_fallback_with_missing_dpapi(api_app, tmp_path, monkeypatch):
 
     # Try composing without passing a key explicitly.
     # It should fall back to GEMINI_API_KEY and succeed!
-    restored_provider, restored_assistant, restored_reason = assistant_support.compose_assistant(
+    (
+        restored_provider,
+        restored_assistant,
+        restored_reason,
+    ) = assistant_support.compose_assistant(
         "gemini",
         "gemini-2.5-pro",
         api_key=None,

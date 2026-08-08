@@ -147,11 +147,12 @@ def _construct(
     try:
         from paios.assistant.adapters.gemini import GeminiProvider
         gem_key = get_key("gemini")
-        gem_model = model if provider == "gemini" else None
-        kwargs = {"model": gem_model} if gem_model else {}
-        if gem_key is not None:
-            kwargs["api_key"] = gem_key
-        providers_map["gemini"] = GeminiProvider(**kwargs)
+        if gem_key or provider == "gemini":
+            gem_model = model if provider == "gemini" else None
+            kwargs = {"model": gem_model} if gem_model else {}
+            if gem_key:
+                kwargs["api_key"] = gem_key
+            providers_map["gemini"] = GeminiProvider(**kwargs)
     except Exception:
         pass
 
@@ -159,11 +160,12 @@ def _construct(
     try:
         from paios.assistant.adapters.anthropic import AnthropicAdapter
         ant_key = get_key("anthropic")
-        ant_model = model if provider == "anthropic" else None
-        kwargs = {"model": ant_model} if ant_model else {}
-        if ant_key is not None:
-            kwargs["api_key"] = ant_key
-        providers_map["anthropic"] = AnthropicAdapter(**kwargs)
+        if ant_key or provider == "anthropic":
+            ant_model = model if provider == "anthropic" else None
+            kwargs = {"model": ant_model} if ant_model else {}
+            if ant_key:
+                kwargs["api_key"] = ant_key
+            providers_map["anthropic"] = AnthropicAdapter(**kwargs)
     except Exception:
         pass
 
@@ -171,11 +173,12 @@ def _construct(
     try:
         from paios.assistant.adapters.openai import OpenAIAdapter
         oai_key = get_key("openai")
-        oai_model = model if provider == "openai" else None
-        kwargs = {"model": oai_model} if oai_model else {}
-        if oai_key is not None:
-            kwargs["api_key"] = oai_key
-        providers_map["openai"] = OpenAIAdapter(**kwargs)
+        if oai_key or provider == "openai":
+            oai_model = model if provider == "openai" else None
+            kwargs = {"model": oai_model} if oai_model else {}
+            if oai_key:
+                kwargs["api_key"] = oai_key
+            providers_map["openai"] = OpenAIAdapter(**kwargs)
     except Exception:
         pass
 
