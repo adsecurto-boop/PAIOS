@@ -6,12 +6,8 @@ composition-time decision the architecture allows about time.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from paios.runtime.clock import Clock
-
-if TYPE_CHECKING:  # type-only: composition supplies the instance
-    from paios.scheduler.planner import Planner
 
 
 @dataclass(frozen=True)
