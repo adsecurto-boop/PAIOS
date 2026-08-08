@@ -30,13 +30,18 @@ from PySide6.QtWidgets import (
     QWizardPage,
 )
 
-from paios_gui.client import ApiClient
+from paios_gui.client import ApiClient, ApiResponseError, ApiTimeout
 from paios_gui.config import (
     DEFAULT_BASE_URL,
     DEFAULT_REFRESH_SECONDS,
     MAX_REFRESH_SECONDS,
     MIN_REFRESH_SECONDS,
 )
+
+#: Probing GET /status is a cheap call, but the backend may still be
+#: starting up behind the launcher — 2 s was tight enough to report a
+#: healthy server as unreachable.
+CONNECT_TIMEOUT_SECONDS = 6.0
 
 
 def should_show_wizard(
@@ -68,30 +73,60 @@ class _UrlPage(QWizardPage):
         self.url_edit = QLineEdit(base_url)
         form.addRow("Backend URL", self.url_edit)
         row = QHBoxLayout()
-        test_button = QPushButton("Test connection")
-        test_button.clicked.connect(self.test_connection)
-        row.addWidget(test_button)
+        self.test_button = QPushButton("Test connection")
+        self.test_button.clicked.connect(self.test_connection)
+        row.addWidget(self.test_button)
         self.result_label = QLabel("")
+        self.result_label.setWordWrap(True)
         row.addWidget(self.result_label, stretch=1)
         form.addRow(row)
 
     def test_connection(self) -> None:
-        client = ApiClient(self.url_edit.text().strip(), timeout=2.0)
+        """Probe GET /status and report the outcome.
+
+        Synchronous by design: it is a one-off, user-initiated check on a
+        modal wizard, and a background thread outliving that dialog is a
+        real crash risk. The "Connecting…" line is painted before the
+        (short) call blocks, and a timeout is reported as its own fact —
+        never conflated with "unreachable" the way a 2 s cap once did.
+        """
+        url = self.url_edit.text().strip()
+        if not url:
+            self.result_label.setText("Enter the address first.")
+            return
+        client = ApiClient(url, timeout=CONNECT_TIMEOUT_SECONDS)
+        self.test_button.setEnabled(False)
+        self.result_label.setText(f"Connecting to {url}…")
+        # Paint just this label before the (short) blocking call. repaint()
+        # is a targeted, synchronous redraw — unlike processEvents(), it
+        # does not re-enter the event loop, so it cannot flush a deferred
+        # widget deletion at a re-entrant point.
+        self.result_label.repaint()
         try:
             status = client.get_status()
-        except Exception:
-            self.result_label.setText(
-                "✗ Could not connect. Check that the PAIOS backend is"
-                " running at this address, then try again."
-            )
-            self.result_label.setWordWrap(True)
+        except ApiTimeout as error:
+            self._fail(f"the address answered but sent nothing within"
+                       f" {error.seconds:g}s")
             return
-        operational = status.get("operational")
+        except ApiResponseError as error:
+            self._fail(f"the server replied HTTP {error.status}: {error}")
+            return
+        except Exception as error:
+            self._fail(str(error))
+            return
         self.result_label.setText(
             "✓ Connected — backend is running"
-            if operational
+            if status.get("operational")
             else "✓ Connected — backend is starting up"
         )
+        self.test_button.setEnabled(True)
+
+    def _fail(self, detail: str) -> None:
+        self.result_label.setText(
+            f"✗ Could not connect — {detail}. Check that the PAIOS backend"
+            " is running at this address, then try again."
+        )
+        self.test_button.setEnabled(True)
 
 
 class _PreferencesPage(QWizardPage):

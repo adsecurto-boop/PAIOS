@@ -26,6 +26,7 @@ strategy — the store is written through on every mutation, so
 terminate cannot lose committed data.
 """
 
+import os
 import subprocess
 import sys
 import time
@@ -131,6 +132,9 @@ class ManagedChild:
                 subprocess.CREATE_NEW_PROCESS_GROUP
                 | subprocess.CREATE_NO_WINDOW
             )
+        env = os.environ.copy()
+        if "PYTHONPATH" not in env or not env["PYTHONPATH"]:
+            env["PYTHONPATH"] = os.pathsep.join(sys.path)
         try:
             self.process = subprocess.Popen(
                 list(self.spec.command),
@@ -139,6 +143,7 @@ class ManagedChild:
                 else subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
                 creationflags=creation_flags,
+                env=env,
             )
         except OSError:
             self._close_output()

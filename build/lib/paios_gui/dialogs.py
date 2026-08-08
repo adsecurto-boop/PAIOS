@@ -195,8 +195,9 @@ class EventDialog(_FormDialog):
 
     ENERGY_LEVELS = ("none", "low", "medium", "high")
 
-    def __init__(self, title: str = "New event", parent=None) -> None:
+    def __init__(self, title: str = "New event", parent=None, projects: list[dict] = None) -> None:
         super().__init__(title, parent)
+        self._projects = projects or []
         self.title_edit = QLineEdit()
         self.when = OptionalDateTime("Schedule at")
         self.priority = QDoubleSpinBox()
@@ -211,8 +212,10 @@ class EventDialog(_FormDialog):
         self.tags_edit = QLineEdit()
         self.tags_edit.setPlaceholderText("comma, separated, tags")
         self.deadline = OptionalDateTime("Deadline")
-        self.project_edit = QLineEdit()
-        self.project_edit.setPlaceholderText("optional project id")
+        self.project_combo = QComboBox()
+        self.project_combo.addItem("— No Project —", None)
+        for project in self._projects:
+            self.project_combo.addItem(project["name"], project["project_id"])
         for label, field in (
             ("Title", self.title_edit),
             ("When", self.when),
@@ -221,7 +224,7 @@ class EventDialog(_FormDialog):
             ("Energy", self.energy),
             ("Tags", self.tags_edit),
             ("Deadline", self.deadline),
-            ("Project", self.project_edit),
+            ("Project", self.project_combo),
         ):
             self._form.addRow(label, field)
         self._finish()
@@ -239,6 +242,15 @@ class EventDialog(_FormDialog):
         if metadata.get("tags"):
             self.tags_edit.setText(", ".join(metadata["tags"]))
         self.deadline.set_iso(metadata.get("deadline"))
+        # Set project selection
+        project_id = event.get("project_id")
+        if project_id:
+            for i in range(self.project_combo.count()):
+                if self.project_combo.itemData(i) == project_id:
+                    self.project_combo.setCurrentIndex(i)
+                    break
+        else:
+            self.project_combo.setCurrentIndex(0)
 
     def values(self) -> dict:
         metadata: dict = {}
@@ -259,7 +271,7 @@ class EventDialog(_FormDialog):
             "title": self.title_edit.text().strip(),
             "suggested_time": self.when.iso(),
             "priority": self.priority.value() or None,
-            "project_id": self.project_edit.text().strip() or None,
+            "project_id": self.project_combo.currentData(),
             "metadata": metadata or None,
         }
 
