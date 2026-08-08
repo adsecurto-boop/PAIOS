@@ -702,17 +702,11 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
 
 def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "env-secret-key")
-<<<<<<< HEAD
-=======
 
->>>>>>> origin/main
     # 1. Mock Gemini transport to succeed
     def fake_gemini_transport(url, payload, headers, timeout):
         if "generateContent" in url:
             return {
-<<<<<<< HEAD
-                "candidates": [{"content": {"parts": [{"text": '{"answer": "Hi from env.", "bullets": [], "confidence": 1.0}'}]}}]
-=======
                 "candidates": [
                     {
                         "content": {
@@ -724,22 +718,14 @@ def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeyp
                         }
                     }
                 ]
->>>>>>> origin/main
             }
         return {}
 
     monkeypatch.setattr(
         "paios.assistant.adapters.gemini.default_transport",
-<<<<<<< HEAD
-        fake_gemini_transport
-    )
-    monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
-
-=======
         fake_gemini_transport,
     )
     monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
->>>>>>> origin/main
     ai_dir = tmp_path / "ai-data"
     ai_dir.mkdir(parents=True, exist_ok=True)
 
@@ -751,16 +737,6 @@ def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeyp
     provider_default = stored.get("provider")
     model_default = stored.get("model")
     resolved = assistant_support.resolve_provider(provider_default)
-<<<<<<< HEAD
-
-    restored_provider, restored_assistant, restored_reason = assistant_support.compose_assistant(
-        provider_default,
-        model_default,
-        api_key=ai_settings.api_key_for(ai_dir, resolved), # This will be None
-        data_dir=ai_dir,
-    )
-
-=======
     (
         restored_provider,
         restored_assistant,
@@ -771,7 +747,6 @@ def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeyp
         api_key=ai_settings.api_key_for(ai_dir, resolved),  # This will be None
         data_dir=ai_dir,
     )
->>>>>>> origin/main
     assert restored_provider == "gemini"
     assert restored_assistant is not None
     assert "gemini adapter ready" in restored_reason.lower()
