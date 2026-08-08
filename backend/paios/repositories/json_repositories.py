@@ -91,7 +91,8 @@ class JsonRepository(Repository[E, I], Generic[E, I]):
     def save(self, entity: E) -> None:
         records = self._records()
         entity_id = self._id_of(entity)
-        if any(record.get(self.ID_FIELD) == entity_id for record in records):
+        existing_ids = {record.get(self.ID_FIELD) for record in records}
+        if entity_id in existing_ids:
             raise DuplicateEntity(
                 f"{type(entity).__name__} {entity_id!r} already exists in "
                 f"{self.FILENAME}; use update() to overwrite"
