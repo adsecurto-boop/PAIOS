@@ -25,7 +25,7 @@ from paios.domain.errors import (
     ImmutabilityViolationError,
     InvariantViolationError,
 )
-from paios.domain.value_objects.identifiers import GoalId, KnowledgeId, UserId
+from paios.domain.value_objects.identifiers import GoalId, KnowledgeId, ProjectId, UserId
 from paios.repositories.errors import EntityNotFound
 
 from tests.application.conftest import USER, at, seed_rest_scenario
@@ -176,6 +176,10 @@ class TestProjectOperations:
         started_app.add_project(USER, "PAIOS")
         with pytest.raises(DuplicateEntityError, match="Project"):
             started_app.add_project(USER, "PAIOS")
+
+    def test_unknown_project_rejected(self, started_app):
+        with pytest.raises(EntityNotFound):
+            started_app.get_project(ProjectId("missing"))
 
 
 class TestPrincipleOperations:
