@@ -515,6 +515,14 @@ class TestModelInfo:
 
 
 def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "paios.api.ai_settings.protect_key", lambda x: "dpapi:" + x
+    )
+    monkeypatch.setattr(
+        "paios.api.ai_settings.unprotect_key",
+        lambda x: x.replace("dpapi:", "") if x.startswith("dpapi:") else None
+    )
+
     # 1. Mock Gemini transport to succeed
     def fake_gemini_transport(url, payload, headers, timeout):
         if "generateContent" in url:
