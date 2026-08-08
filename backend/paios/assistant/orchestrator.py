@@ -400,3 +400,33 @@ class AssistantOrchestrator:
             ),
             question=question,
         )
+
+    def test_connection(self) -> AssistantResult:
+        task = AssistantTask.ANSWER_QUESTION
+        template = prompts.TEMPLATES[TASK_TEMPLATES[task]]
+        user_prompt = template.render(
+            subject="The user asked a question about their own data.",
+            context="",
+            question="Reply with one short sentence confirming the PAIOS assistant is reachable.",
+        )
+        request = AssistantRequest(
+            task=task,
+            template_name=template.name,
+            system_prompt=template.system,
+            user_prompt=user_prompt,
+        )
+        from paios.assistant.provider_manager import ProviderManager
+        if isinstance(self._adapter, ProviderManager):
+            raw = self._adapter.complete_without_fallback(request)
+        else:
+            raw = self._adapter.complete(request)
+        parsed = parse_response(raw)
+        return AssistantResult(
+            task=task,
+            answer=parsed.answer,
+            bullets=parsed.bullets,
+            confidence=parsed.confidence,
+            adapter=self._adapter.name,
+            prompt=user_prompt,
+            raw_response=raw,
+        )

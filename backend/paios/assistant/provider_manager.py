@@ -114,6 +114,10 @@ class ProviderManager(LlmAdapter):
                     continue
                 fallback_provider = self._providers.get(fallback_name)
                 if fallback_provider:
+                    import logging
+                    logging.getLogger("paios.api").warning(
+                        f"[DEBUG] ProviderManager fallback triggered (no active provider for {self._active_provider_name}): falling back to {fallback_name}"
+                    )
                     fallback_start = time.perf_counter()
                     try:
                         if fallback_name == "ollama" and hasattr(fallback_provider, "_model"):
@@ -179,6 +183,10 @@ class ProviderManager(LlmAdapter):
                     continue
                 fallback_provider = self._providers.get(fallback_name)
                 if fallback_provider:
+                    import logging
+                    logging.getLogger("paios.api").warning(
+                        f"[DEBUG] ProviderManager fallback triggered (primary provider {provider.name} failed): falling back to {fallback_name}"
+                    )
                     fallback_start = time.perf_counter()
                     try:
                         if fallback_name == "ollama" and hasattr(fallback_provider, "_model"):
@@ -208,6 +216,16 @@ class ProviderManager(LlmAdapter):
                             error=str(fallback_err),
                         )
             raise err
+
+    def complete_without_fallback(self, request) -> str:
+        provider = self.get_active_provider()
+        if not provider:
+            raise AdapterError(f"AI Provider {self._active_provider_name!r} could not be initialized (missing API key or SDK)")
+        import logging
+        logging.getLogger("paios.api").warning(
+            f"[DEBUG] ProviderManager complete_without_fallback: active={self._active_provider_name}. Bypassing fallback chain."
+        )
+        return provider.complete(request)
 
     def _log_request(
         self,

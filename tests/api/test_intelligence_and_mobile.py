@@ -752,9 +752,8 @@ def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeyp
     assert "gemini adapter ready" in restored_reason.lower()
 
 
-def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch):
-    # If Gemini is available but throws an error during complete(), it should NOT fall back to Ollama
-    # (even if Ollama is available in providers_map).
+def test_gemini_falls_back_to_ollama_when_available(api_app, tmp_path, monkeypatch):
+    # If Gemini is available but throws an error during complete(), it should fall back to Ollama
     monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
 
     # 1. Mock Gemini transport to fail
@@ -768,6 +767,8 @@ def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch
 
     # Mock Ollama transport to succeed so Ollama is available
     def succeeding_ollama(url, payload, timeout):
+        if "chat" in url:
+            return {"message": {"content": "{\"answer\": \"Hi from Ollama fallback.\", \"bullets\": [], \"confidence\": 1.0}"}}
         return {"version": "0.1.0"}
 
     monkeypatch.setattr(
@@ -788,12 +789,9 @@ def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch
     assert assistant is not None
     assert "gemini adapter ready" in reason
 
-    # Call completion and check that it does NOT fall back to Ollama, but propagates the error!
-    from paios.assistant.adapters import AdapterError
-
-    with pytest.raises(AdapterError) as excinfo:
-        assistant.answer_question("test prompt")
-    assert "Gemini request failed" in str(excinfo.value)
+    # Call completion and check that it falls back to Ollama!
+    res = assistant.answer_question("test prompt")
+    assert res.answer == "Hi from Ollama fallback."
 
 
 def test_gemini_fallback_with_missing_dpapi(api_app, tmp_path, monkeypatch):
@@ -927,3 +925,113 @@ def test_assistant_config_endpoints_warnings_on_non_windows(api_app, tmp_path, m
     assert "warning" in put_payload
     assert "Secure key storage is unavailable on this platform" in put_payload["warning"]
     assert "export GEMINI_API_KEY=" in put_payload["warning"]
+
+
+def test_gemini_test_connection_failures(api_app, tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "paios.api.ai_settings.protect_key", lambda x: "dpapi:" + x
+    )
+    monkeypatch.setattr(
+        "paios.api.ai_settings.unprotect_key",
+        lambda x: x.replace("dpapi:", "") if x.startswith("dpapi:") else None,
+    )
+    monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    ai_dir = tmp_path / "ai-data"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+
+    # Mock Ollama transport to return a successful Ollama response
+    def succeeding_ollama(url, payload, timeout):
+        if "chat" in url:
+            return {"message": {"content": "{\"answer\": \"Hi from Ollama fallback.\", \"bullets\": [], \"confidence\": 1.0}"}}
+        return {"version": "0.1.0"}
+
+    monkeypatch.setattr(
+        "paios.assistant.adapters.ollama.default_transport", succeeding_ollama
+    )
+
+    # 1. Missing Key Scenario
+    # Configure Gemini with no key
+    router1 = ApiRouter(
+        api_app,
+        planning=PlanningService(tmp_path / "planning-data"),
+        backups=BackupManager(tmp_path / "data", tmp_path / "backups"),
+        assistant=None,
+        assistant_provider="none",
+        ai_dir=ai_dir,
+    )
+    put_status, put_payload = router1.handle(
+        "PUT",
+        "/assistant/config",
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "api_key": ""
+        }
+    )
+    # The active assistant has Gemini but without a key
+    test_status, test_payload = router1.handle("POST", "/assistant/test", {})
+    assert test_status == 200
+    assert test_payload["ok"] is False
+    assert test_payload["source"] == "llm"
+    assert "could not be initialized" in test_payload["answer"].lower() or "missing" in test_payload["answer"].lower()
+
+    # 2. Invalid Key Scenario
+    # Mock Gemini transport to return 401 Unauthorized
+    def failing_gemini_401(url, payload, headers, timeout):
+        import urllib.error
+        raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(
+        "paios.assistant.adapters.gemini.default_transport", failing_gemini_401
+    )
+
+    # Configure Gemini with a key (so it initializes successfully)
+    # Live-recompose will build the orchestrator
+    put_status, put_payload = router1.handle(
+        "PUT",
+        "/assistant/config",
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "api_key": "invalid-gemini-key"
+        }
+    )
+    assert put_payload["available"] is True
+
+    # Test connection. It should call Gemini and fail, rather than falling back to Ollama!
+    test_status, test_payload = router1.handle("POST", "/assistant/test", {})
+    assert test_status == 200
+    assert test_payload["ok"] is False
+    assert test_payload["source"] == "llm"
+    assert "Invalid API Key" in test_payload["answer"]
+
+    # 3. HTTP/API Failure (Quota Exceeded 429) Scenario
+    # Mock Gemini transport to return 429 Too Many Requests
+    def failing_gemini_429(url, payload, headers, timeout):
+        import urllib.error
+        raise urllib.error.HTTPError(url, 429, "Too Many Requests", {}, None)
+
+    monkeypatch.setattr(
+        "paios.assistant.adapters.gemini.default_transport", failing_gemini_429
+    )
+
+    # Force recomposition so GeminiProvider gets the new default_transport mock
+    router1.handle(
+        "PUT",
+        "/assistant/config",
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "api_key": "invalid-gemini-key"
+        }
+    )
+
+    test_status, test_payload = router1.handle("POST", "/assistant/test", {})
+    assert test_status == 200
+    assert test_payload["ok"] is False
+    assert test_payload["source"] == "llm"
+    assert "Quota exceeded" in test_payload["answer"]
+
+

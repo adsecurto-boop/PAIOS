@@ -11,7 +11,10 @@ scheduler, decision-engine, learning, or repository-implementation
 module is imported.
 """
 
+import json
 import os
+from pathlib import Path
+import threading
 from datetime import timedelta
 
 from paios.application.application import Application
@@ -110,11 +113,12 @@ class ApiRouter:
         self._relay_status = relay_status
         self._relay_reload = relay_reload
         self._relay_authorize = relay_authorize
-        # Per-request transport context. The HTTP server is deliberately
-        # single-threaded (see server.py), so stashing per request is
-        # safe; tests calling handle() directly are sequential too.
-        self._request_headers: dict | None = None
-        self._request_client: str | None = None
+        # Per-request transport context (auth headers, client address).
+        # THREAD-LOCAL: the server serializes domain work behind one lock
+        # but serves slow provider calls concurrently (see server.py), so
+        # two requests can be in handle() at once. Stashing on ``self``
+        # would let one request read another's Authorization header.
+        self._request_state = threading.local()
 
     def _require_planning(self) -> PlanningService:
         if self._planning is None:
@@ -128,6 +132,14 @@ class ApiRouter:
 
     # --- dispatch --------------------------------------------------------
 
+    @property
+    def _request_headers(self) -> dict | None:
+        return getattr(self._request_state, "headers", None)
+
+    @property
+    def _request_client(self) -> str | None:
+        return getattr(self._request_state, "client_host", None)
+
     def handle(
         self,
         method: str,
@@ -136,15 +148,15 @@ class ApiRouter:
         headers: dict | None = None,
         client_host: str | None = None,
     ) -> tuple[int, dict]:
-        self._request_headers = headers
-        self._request_client = client_host
+        self._request_state.headers = headers
+        self._request_state.client_host = client_host
         try:
             return self._dispatch(method.upper(), path, body)
         except Exception as error:  # translated, never propagated
             return translate(error)
         finally:
-            self._request_headers = None
-            self._request_client = None
+            self._request_state.headers = None
+            self._request_state.client_host = None
 
     def _dispatch(self, method: str, path: str, body) -> tuple[int, dict]:
         segments = tuple(
@@ -479,11 +491,19 @@ class ApiRouter:
     # --- assistant (M20: proposals and explanations ONLY) ----------------------
 
     def _get_assistant_status(self, params, body):
+        caps = {}
+        if self._assistant and hasattr(self._assistant, "orchestrator") and hasattr(self._assistant.orchestrator, "get_capabilities"):
+            caps = self._assistant.orchestrator.get_capabilities()
+        elif self._assistant and hasattr(self._assistant, "get_capabilities"):
+            caps = self._assistant.get_capabilities()
+        elif self._assistant and hasattr(self._assistant, "_manager") and hasattr(self._assistant._manager, "get_capabilities"):
+            caps = self._assistant._manager.get_capabilities()
         return 200, {
             "provider": self._assistant_provider,
             "available": self._assistant is not None,
             "fallback": "heuristic",
             "reason": self._assistant_reason,
+            "capabilities": caps,
         }
 
     # --- intelligence layer: setup + settings (transport concern) ----------
@@ -492,6 +512,17 @@ class ApiRouter:
         if self._ai_dir is None:
             raise ApiError(503, "AI settings are not composed")
         return self._ai_dir
+
+    def _get_assistant_providers(self, params, body):
+        providers_list = {}
+        if self._assistant:
+            # We have composed the orchestrator, let's query the manager if available
+            mgr = getattr(self._assistant, "_adapter", None)
+            if mgr and hasattr(mgr, "list_providers"):
+                providers_list = mgr.list_providers()
+            elif hasattr(self._assistant, "list_providers"):
+                providers_list = self._assistant.list_providers()
+        return 200, {"providers": providers_list}
 
     def _get_assistant_setup(self, params, body):
         """Hardware, model recommendations and Ollama state — the one
@@ -518,7 +549,12 @@ class ApiRouter:
     def _get_assistant_config(self, params, body):
         ai_dir = self._require_ai_dir()
         stored = ai_settings.load(ai_dir)
-        return 200, {
+        caps = {}
+        if self._assistant:
+            mgr = getattr(self._assistant, "orchestrator", None) or getattr(self._assistant, "_manager", None)
+            if mgr and hasattr(mgr, "get_capabilities"):
+                caps = mgr.get_capabilities()
+        payload = {
             "provider": self._assistant_provider,
             "model": stored.get("model"),
             "providers": list(assistant_support.PROVIDERS),
@@ -529,7 +565,19 @@ class ApiRouter:
             "env_override": bool(os.environ.get("PAIOS_AI_PROVIDER")),
             "available": self._assistant is not None,
             "reason": self._assistant_reason,
+            "capabilities": caps,
         }
+        if os.name != "nt":
+            prov = stored.get("provider") or self._assistant_provider
+            if prov in ai_settings.KEY_VARIABLES:
+                env_var = ai_settings.KEY_VARIABLES[prov]
+                payload["warning"] = (
+                    "Secure key storage is unavailable on this platform"
+                    f" — set the export {env_var}=\"your-key\" environment variable"
+                    " in your terminal session before running paios serve"
+                    " rather than typing it into the settings UI."
+                )
+        return 200, payload
 
     def _put_assistant_config(self, params, body):
         """Persist provider/model (and optionally a cloud API key),
@@ -552,27 +600,34 @@ class ApiRouter:
                     400, f"Provider {provider!r} takes no API key"
                 )
             if not ai_settings.store_api_key(ai_dir, provider, api_key):
+                env_var = ai_settings.KEY_VARIABLES[provider]
                 key_warning = (
                     "Secure key storage is unavailable on this platform"
-                    " — set the "
-                    + ai_settings.KEY_VARIABLES[provider]
-                    + " environment variable instead. The key was NOT"
+                    f" — set the export {env_var}=\"your-key\" environment variable"
+                    " in your terminal session before running paios serve"
+                    " rather than typing it into the settings UI. The key was NOT"
                     " stored."
                 )
         ai_settings.save(ai_dir, {"provider": provider, "model": model})
-        stored_key = ai_settings.api_key_for(ai_dir, provider)
+        stored_key = ai_settings.api_key_for(ai_dir, provider) or api_key
         (
             self._assistant_provider,
             self._assistant,
             self._assistant_reason,
         ) = assistant_support.compose_assistant(
-            provider, model, api_key=stored_key
+            provider, model, api_key=stored_key, data_dir=ai_dir
         )
+        caps = {}
+        if self._assistant:
+            mgr = getattr(self._assistant, "orchestrator", None) or getattr(self._assistant, "_manager", None)
+            if mgr and hasattr(mgr, "get_capabilities"):
+                caps = mgr.get_capabilities()
         payload = {
             "provider": self._assistant_provider,
             "available": self._assistant is not None,
             "fallback": "heuristic",
             "reason": self._assistant_reason,
+            "capabilities": caps,
         }
         if key_warning:
             payload["warning"] = key_warning
@@ -608,6 +663,55 @@ class ApiRouter:
             "adapter": result.adapter,
             "answer": result.answer,
         }
+
+    def _get_assistant_logs(self, params, body):
+        ai_dir = self._require_ai_dir()
+        log_file = Path(ai_dir) / "ai_request_logs.json"
+        logs = []
+        if log_file.exists():
+            try:
+                logs = json.loads(log_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        
+        # Calculate summary
+        total_requests = len(logs)
+        success_count = sum(1 for log in logs if log.get("success", False))
+        failure_count = total_requests - success_count
+        total_tokens = sum(
+            log.get("prompt_tokens", 0) + log.get("completion_tokens", 0)
+            for log in logs
+        )
+        total_cost_usd = sum(log.get("cost_usd", 0.0) for log in logs)
+        
+        costs_by_provider = {}
+        for log in logs:
+            prov = log.get("provider", "unknown")
+            costs_by_provider[prov] = costs_by_provider.get(prov, 0.0) + log.get("cost_usd", 0.0)
+            
+        return 200, {
+            "summary": {
+                "total_requests": total_requests,
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "total_tokens": total_tokens,
+                "total_cost_usd": round(total_cost_usd, 6),
+                "costs_by_provider": {
+                    prov: round(val, 6) for prov, val in costs_by_provider.items()
+                }
+            },
+            "logs": logs
+        }
+
+    def _delete_assistant_logs(self, params, body):
+        ai_dir = self._require_ai_dir()
+        log_file = Path(ai_dir) / "ai_request_logs.json"
+        try:
+            if log_file.exists():
+                log_file.unlink()
+        except Exception as e:
+            raise ApiError(500, f"Could not delete logs: {e}")
+        return 200, {"deleted": True}
 
     # --- intelligence layer: daily-rhythm workflows ------------------------
     # Read-only observations in both paths (LLM or deterministic); the
@@ -1429,6 +1533,7 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("POST", ("inbox", "{id}", "archive"), ApiRouter._post_inbox_archive),
     ("DELETE", ("inbox", "{id}"), ApiRouter._delete_inbox),
     ("GET", ("assistant", "status"), ApiRouter._get_assistant_status),
+    ("GET", ("assistant", "providers"), ApiRouter._get_assistant_providers),
     ("POST", ("assistant", "plan"), ApiRouter._post_assistant_plan),
     (
         "POST",
@@ -1456,6 +1561,8 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("GET", ("assistant", "config"), ApiRouter._get_assistant_config),
     ("PUT", ("assistant", "config"), ApiRouter._put_assistant_config),
     ("POST", ("assistant", "test"), ApiRouter._post_assistant_test),
+    ("GET", ("assistant", "logs"), ApiRouter._get_assistant_logs),
+    ("DELETE", ("assistant", "logs"), ApiRouter._delete_assistant_logs),
     (
         "POST",
         ("assistant", "morning-plan"),
@@ -1517,3 +1624,36 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("GET", ("system", "relay"), ApiRouter._get_system_relay),
     ("PUT", ("system", "relay"), ApiRouter._put_system_relay),
 )
+
+
+#: Routes the transport may serve WITHOUT holding the domain lock.
+#:
+#: Every entry below is external I/O only — the configured AI provider
+#: or the local Ollama server — and touches neither the Application, the
+#: runtime kernel, nor any JSON store. Serving them concurrently is what
+#: stops a multi-minute model round trip from starving every poll: while
+#: `POST /assistant/test` waits on the model, `/dashboard` and `/status`
+#: keep answering, so the desktop and the phone no longer report a false
+#: "offline" for a server that is up. Everything not listed here stays
+#: serialized behind the one lock, so the store and the kernel see the
+#: same one-request-at-a-time world they were written for.
+CONCURRENT_PATHS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("assistant", "test"),
+        ("assistant", "setup"),
+        ("assistant", "providers"),
+        ("assistant", "ollama"),
+        ("assistant", "ollama", "pull"),
+        ("assistant", "ollama", "remove"),
+        ("assistant", "ollama", "show"),
+    }
+)
+
+
+def runs_concurrently(path: str) -> bool:
+    """True when [path] may be served without the domain lock."""
+    segments = tuple(
+        segment for segment in path.split("?")[0].strip("/").split("/")
+        if segment
+    )
+    return segments in CONCURRENT_PATHS

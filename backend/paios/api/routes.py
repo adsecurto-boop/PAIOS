@@ -647,10 +647,7 @@ class ApiRouter:
                 "reason": self._assistant_reason,
             }
         try:
-            result = self._assistant.answer_question(
-                "Reply with one short sentence confirming the PAIOS"
-                " assistant is reachable."
-            )
+            result = self._assistant.test_connection()
         except assistant_support.FALLBACK_ERRORS as error:
             return 200, {
                 "source": "llm",

@@ -8,14 +8,15 @@ import os
 from paios.assistant.adapters import (
     AdapterError,
     AdapterUnavailableError,
-    LlmAdapter,
+    AIProvider,
+    ProviderCapabilities,
 )
 
 DEFAULT_MODEL = "gpt-4o"
 API_KEY_VARIABLE = "OPENAI_API_KEY"
 
 
-class OpenAIAdapter(LlmAdapter):
+class OpenAIAdapter(AIProvider):
     def __init__(
         self,
         api_key: str | None = None,
@@ -42,6 +43,22 @@ class OpenAIAdapter(LlmAdapter):
             # construction, which callers cannot map to the fallback.
             raise AdapterUnavailableError(f"{API_KEY_VARIABLE} is not set")
         self._client = openai.OpenAI(api_key=key)
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        from paios.assistant.adapters import ProviderCapabilities
+        return ProviderCapabilities(
+            streaming=True,
+            vision=True,
+            tool_calling=True
+        )
+
+    def health_check(self) -> tuple[bool, str]:
+        if not getattr(self, "_client", None):
+            return False, "OpenAI client not initialized"
+        if not self._client.api_key:
+            return False, f"{API_KEY_VARIABLE} is not set"
+        return True, "Ready"
 
     @property
     def name(self) -> str:

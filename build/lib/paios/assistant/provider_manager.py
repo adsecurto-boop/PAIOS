@@ -108,6 +108,40 @@ class ProviderManager(LlmAdapter):
     def complete(self, request) -> str:
         provider = self.get_active_provider()
         if not provider:
+            # Try fallback chain immediately
+            for fallback_name in self._fallback_chain:
+                if fallback_name == self._active_provider_name:
+                    continue
+                fallback_provider = self._providers.get(fallback_name)
+                if fallback_provider:
+                    fallback_start = time.perf_counter()
+                    try:
+                        if fallback_name == "ollama" and hasattr(fallback_provider, "_model"):
+                            from paios.assistant.adapters.ollama import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL
+                            fallback_provider._model = OLLAMA_DEFAULT_MODEL
+                        reply = fallback_provider.complete(request)
+                        prompt_tokens = getattr(fallback_provider, "_last_prompt_tokens", 0)
+                        completion_tokens = getattr(fallback_provider, "_last_completion_tokens", 0)
+                        latency_ms = int((time.perf_counter() - fallback_start) * 1000)
+                        self._log_request(
+                            provider_name=fallback_provider.name,
+                            latency_ms=latency_ms,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            success=True,
+                            error=None,
+                        )
+                        return reply
+                    except AdapterError as fallback_err:
+                        latency_ms = int((time.perf_counter() - fallback_start) * 1000)
+                        self._log_request(
+                            provider_name=fallback_provider.name,
+                            latency_ms=latency_ms,
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            success=False,
+                            error=str(fallback_err),
+                        )
             raise AdapterError(f"No active provider configured for {self._active_provider_name!r}")
 
         start_time = time.perf_counter()
@@ -147,6 +181,9 @@ class ProviderManager(LlmAdapter):
                 if fallback_provider:
                     fallback_start = time.perf_counter()
                     try:
+                        if fallback_name == "ollama" and hasattr(fallback_provider, "_model"):
+                            from paios.assistant.adapters.ollama import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL
+                            fallback_provider._model = OLLAMA_DEFAULT_MODEL
                         reply = fallback_provider.complete(request)
                         prompt_tokens = getattr(fallback_provider, "_last_prompt_tokens", 0)
                         completion_tokens = getattr(fallback_provider, "_last_completion_tokens", 0)

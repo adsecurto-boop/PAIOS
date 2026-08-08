@@ -59,6 +59,9 @@ class OllamaProvider(AIProvider):
         timeout: float = _COMPLETION_TIMEOUT_SECONDS,
         transport=None,
     ) -> None:
+        # Fall back to DEFAULT_MODEL if a cloud model was passed
+        if model and any(model.startswith(prefix) for prefix in ("gemini", "gpt", "claude")):
+            model = DEFAULT_MODEL
         self._model = model
         self._base_url = resolve_base_url(base_url)
         self._timeout = timeout
@@ -99,6 +102,12 @@ class OllamaProvider(AIProvider):
             return False, f"Ollama is not reachable at {self._base_url}: {error}"
 
     def complete(self, request) -> str:
+        # Check and log if gemini-2.5-flash or other cloud models reach Ollama
+        import logging
+        if self._model and any(self._model.startswith(prefix) for prefix in ("gemini", "gpt", "claude")):
+            logging.getLogger("paios.api").warning(
+                f"[DEBUG] OllamaProvider complete: ERROR - cloud model {self._model} reached Ollama!"
+            )
         payload = {
             "model": self._model,
             "stream": False,

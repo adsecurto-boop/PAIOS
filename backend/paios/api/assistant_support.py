@@ -182,10 +182,11 @@ def _construct(
         pass
 
     fallback_chain = []
+    if provider == "gemini" and "ollama" in providers_map:
+        fallback_chain = ["ollama"]
+
     if provider not in providers_map:
-        if provider == "gemini" and "ollama" in providers_map:
-            fallback_chain = ["ollama"]
-        else:
+        if not fallback_chain:
             raise AdapterError(f"AI Provider {provider!r} could not be initialized (missing SDK, server, or API key).")
 
     from paios.assistant.provider_manager import ProviderManager
