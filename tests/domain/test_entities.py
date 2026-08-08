@@ -252,6 +252,15 @@ class TestHabit:
         with pytest.raises(DomainValidationError):
             habit.update_strength(101.0, at(1))
 
+    def test_requires_name(self):
+        with pytest.raises(DomainValidationError, match="Habit requires a name"):
+            Habit.infer(
+                habit_id=HabitId("hab_001"),
+                user_id=USER,
+                name="   ",
+                detected_at=T0,
+            )
+
     def test_never_owns_events(self):
         field_names = {field.name for field in fields(Habit)}
         assert not any("event" in name for name in field_names)
