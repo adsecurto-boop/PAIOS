@@ -393,3 +393,39 @@ class TestForbiddenImports:
                         assert name.startswith(ALLOWED_PAIOS_PREFIXES), (
                             f"{module_path.name} imports {name!r}"
                         )
+
+
+class TestRouteMatching:
+    def test_match_exact_and_placeholders(self):
+        from paios.api.routes import _match
+
+        # Exact match, no placeholders
+        assert _match(("status",), ("status",)) == {}
+
+        # Placeholder match
+        assert _match(("events", "{id}"), ("events", "123")) == {"id": "123"}
+
+        # Multiple placeholders
+        assert _match(
+            ("events", "{id}", "metadata", "{field}"),
+            ("events", "123", "metadata", "title")
+        ) == {"id": "123", "field": "title"}
+
+        # Empty segments match
+        assert _match((), ()) == {}
+
+    def test_match_mismatch_cases(self):
+        from paios.api.routes import _match
+
+        # Different lengths
+        assert _match(("status",), ("status", "extra")) is None
+        assert _match(("status", "extra"), ("status",)) is None
+
+        # Exact string mismatch
+        assert _match(("status",), ("wrong",)) is None
+
+        # Placeholder length match but literal segment mismatch
+        assert _match(("events", "{id}"), ("goals", "123")) is None
+
+        # Partial literal mismatch
+        assert _match(("events", "start"), ("events", "stop")) is None
