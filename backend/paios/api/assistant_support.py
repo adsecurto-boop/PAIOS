@@ -153,8 +153,9 @@ def _construct(
         if gem_key is not None:
             kwargs["api_key"] = gem_key
         providers_map["gemini"] = GeminiProvider(**kwargs)
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("paios.api").error(f"Gemini init failed: {e}")
 
     # 4. Anthropic
     try:

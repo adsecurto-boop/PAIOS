@@ -886,3 +886,44 @@ def test_gemini_fallback_with_missing_dpapi(api_app, tmp_path, monkeypatch):
     assert restored_provider == "gemini"
     assert restored_assistant is not None
     assert "gemini adapter ready" in restored_reason.lower()
+
+def test_assistant_config_endpoints_warnings_on_non_windows(api_app, tmp_path, monkeypatch):
+    # Mock os.name to be non-Windows ("posix") and mock key protection to fail
+    monkeypatch.setattr("os.name", "posix")
+    monkeypatch.setattr("paios.api.ai_settings.protect_key", lambda x: None)
+    monkeypatch.setattr("paios.api.ai_settings.unprotect_key", lambda x: None)
+
+    ai_dir = tmp_path / "ai-data"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+    ai_settings.save(ai_dir, {"provider": "gemini", "model": "gemini-2.5-flash"})
+
+    router = ApiRouter(
+        api_app,
+        planning=PlanningService(tmp_path / "planning-data"),
+        backups=BackupManager(tmp_path / "data", tmp_path / "backups"),
+        assistant=None,
+        assistant_provider="none",
+        ai_dir=ai_dir,
+    )
+
+    # 1. Test GET config endpoint
+    get_status, get_payload = router.handle("GET", "/assistant/config")
+    assert get_status == 200
+    assert "warning" in get_payload
+    assert "Secure key storage is unavailable on this platform" in get_payload["warning"]
+    assert "export GEMINI_API_KEY=" in get_payload["warning"]
+
+    # 2. Test PUT config endpoint
+    put_status, put_payload = router.handle(
+        "PUT",
+        "/assistant/config",
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-flash",
+            "api_key": "some-secret-key"
+        }
+    )
+    assert put_status == 200
+    assert "warning" in put_payload
+    assert "Secure key storage is unavailable on this platform" in put_payload["warning"]
+    assert "export GEMINI_API_KEY=" in put_payload["warning"]

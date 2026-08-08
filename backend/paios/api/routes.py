@@ -554,7 +554,7 @@ class ApiRouter:
             mgr = getattr(self._assistant, "orchestrator", None) or getattr(self._assistant, "_manager", None)
             if mgr and hasattr(mgr, "get_capabilities"):
                 caps = mgr.get_capabilities()
-        return 200, {
+        payload = {
             "provider": self._assistant_provider,
             "model": stored.get("model"),
             "providers": list(assistant_support.PROVIDERS),
@@ -567,6 +567,17 @@ class ApiRouter:
             "reason": self._assistant_reason,
             "capabilities": caps,
         }
+        if os.name != "nt":
+            prov = stored.get("provider") or self._assistant_provider
+            if prov in ai_settings.KEY_VARIABLES:
+                env_var = ai_settings.KEY_VARIABLES[prov]
+                payload["warning"] = (
+                    "Secure key storage is unavailable on this platform"
+                    f" — set the export {env_var}=\"your-key\" environment variable"
+                    " in your terminal session before running paios serve"
+                    " rather than typing it into the settings UI."
+                )
+        return 200, payload
 
     def _put_assistant_config(self, params, body):
         """Persist provider/model (and optionally a cloud API key),
@@ -589,11 +600,12 @@ class ApiRouter:
                     400, f"Provider {provider!r} takes no API key"
                 )
             if not ai_settings.store_api_key(ai_dir, provider, api_key):
+                env_var = ai_settings.KEY_VARIABLES[provider]
                 key_warning = (
                     "Secure key storage is unavailable on this platform"
-                    " — set the "
-                    + ai_settings.KEY_VARIABLES[provider]
-                    + " environment variable instead. The key was NOT"
+                    f" — set the export {env_var}=\"your-key\" environment variable"
+                    " in your terminal session before running paios serve"
+                    " rather than typing it into the settings UI. The key was NOT"
                     " stored."
                 )
         ai_settings.save(ai_dir, {"provider": provider, "model": model})
