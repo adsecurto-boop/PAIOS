@@ -20,7 +20,6 @@ from paios.assistant.adapters import (
     AdapterError,
     AdapterUnavailableError,
     AIProvider,
-    LlmAdapter,
     ProviderCapabilities,
 )
 
