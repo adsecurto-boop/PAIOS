@@ -442,6 +442,12 @@ class ApiClient:
             timeout=AI_REQUEST_TIMEOUT_SECONDS,
         )
 
+    def get_assistant_logs(self) -> dict:
+        return self._request("GET", "/assistant/logs")
+
+    def delete_assistant_logs(self) -> dict:
+        return self._request("DELETE", "/assistant/logs")
+
     # --- networking (M21: the Networking page) ------------------------------
 
     def system_network(self) -> dict:

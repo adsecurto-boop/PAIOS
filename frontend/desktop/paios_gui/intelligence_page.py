@@ -47,11 +47,18 @@ _REFRESH_INTERVAL_SECONDS = 30.0
 _MODES = (
     ("Automatic", "auto"),
     ("Local AI (Ollama)", "ollama"),
+    ("Google Gemini", "gemini"),
     ("OpenAI", "openai"),
     ("Anthropic", "anthropic"),
     ("Offline (no AI)", "none"),
 )
-_CLOUD = ("openai", "anthropic")
+_CLOUD = ("openai", "anthropic", "gemini")
+
+_CLOUD_MODELS = {
+    "gemini": ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-2.5-flash", "gemini-2.5-pro"],
+    "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+    "anthropic": ["claude-3-5-sonnet-latest", "claude-3-opus-latest", "claude-opus-4-8"],
+}
 
 
 class IntelligencePage(QWidget):
@@ -91,6 +98,14 @@ class IntelligencePage(QWidget):
         self.hardware_chip.setObjectName("statusChip")
         self.hardware_chip.setStyleSheet(f"background:{TEXT_DIM}; color:#14161a;")
         header.addWidget(self.hardware_chip)
+        
+        # Capabilities indicator.
+        self.capabilities_chip = QLabel("")
+        self.capabilities_chip.setObjectName("statusChip")
+        self.capabilities_chip.setStyleSheet(f"background:{TEXT_DIM}; color:#14161a;")
+        self.capabilities_chip.hide()
+        header.addWidget(self.capabilities_chip)
+        
         self.status_text = QLabel("")
         self.status_text.setObjectName("subtitle")
         self.status_text.setWordWrap(True)
@@ -109,7 +124,7 @@ class IntelligencePage(QWidget):
         mode_row.addWidget(self.apply_button)
         column.addLayout(mode_row)
 
-        # Cloud key (shown only for OpenAI / Anthropic).
+        # Cloud key (shown only for OpenAI / Anthropic / Gemini).
         self.key_row = QWidget()
         key_layout = QHBoxLayout(self.key_row)
         key_layout.setContentsMargins(0, 0, 0, 0)
@@ -123,6 +138,29 @@ class IntelligencePage(QWidget):
         self.mode_combo.currentIndexChanged.connect(self._toggle_key_row)
         column.addWidget(self.key_row)
 
+        # Model row (shown for Ollama and Cloud providers)
+        self.model_row = QWidget()
+        model_layout = QHBoxLayout(self.model_row)
+        model_layout.setContentsMargins(0, 0, 0, 0)
+        model_layout.addWidget(QLabel("Model:"))
+        self.model_combo = QComboBox()
+        self.model_combo.setMinimumWidth(200)
+        model_layout.addWidget(self.model_combo)
+        self.use_local_button = QPushButton("Use Local AI")
+        self.use_local_button.setObjectName("primaryAction")
+        self.use_local_button.clicked.connect(self._on_use_local)
+        model_layout.addWidget(self.use_local_button)
+        self.install_button = QPushButton("Download model")
+        self.install_button.clicked.connect(self._on_install_model)
+        model_layout.addWidget(self.install_button)
+        model_layout.addStretch(1)
+        column.addWidget(self.model_row)
+
+        self.model_info = QLabel("")
+        self.model_info.setObjectName("subtitle")
+        self.model_info.setWordWrap(True)
+        column.addWidget(self.model_info)
+
         # --- local AI card ------------------------------------------------
         self.local_card = self._card("Local AI (Ollama)")
         card_layout = self.local_card.layout()
@@ -133,24 +171,6 @@ class IntelligencePage(QWidget):
         self.hardware_label.setObjectName("subtitle")
         self.hardware_label.setWordWrap(True)
         card_layout.addWidget(self.hardware_label)
-        model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("Model:"))
-        self.model_combo = QComboBox()
-        self.model_combo.setMinimumWidth(200)
-        model_row.addWidget(self.model_combo)
-        self.use_local_button = QPushButton("Use Local AI")
-        self.use_local_button.setObjectName("primaryAction")
-        self.use_local_button.clicked.connect(self._on_use_local)
-        model_row.addWidget(self.use_local_button)
-        self.install_button = QPushButton("Download model")
-        self.install_button.clicked.connect(self._on_install_model)
-        model_row.addWidget(self.install_button)
-        model_row.addStretch(1)
-        card_layout.addLayout(model_row)
-        self.model_info = QLabel("")
-        self.model_info.setObjectName("subtitle")
-        self.model_info.setWordWrap(True)
-        card_layout.addWidget(self.model_info)
         column.addWidget(self.local_card)
 
         # --- test card ----------------------------------------------------
@@ -170,6 +190,22 @@ class IntelligencePage(QWidget):
         self.test_output.setWordWrap(True)
         test_layout.addWidget(self.test_output)
         column.addWidget(test_card)
+
+        # --- API logs card ----------------------------------------------------
+        self.logs_card = self._card("API Usage & Costs")
+        logs_layout = self.logs_card.layout()
+        summary_row = QHBoxLayout()
+        self.log_summary_label = QLabel("No logs loaded.")
+        summary_row.addWidget(self.log_summary_label, stretch=1)
+        self.clear_logs_button = QPushButton("Clear logs")
+        self.clear_logs_button.clicked.connect(self._on_clear_logs)
+        summary_row.addWidget(self.clear_logs_button)
+        logs_layout.addLayout(summary_row)
+        self.log_list_widget = QWidget()
+        self.log_list_layout = QVBoxLayout(self.log_list_widget)
+        self.log_list_layout.setContentsMargins(0, 10, 0, 0)
+        logs_layout.addWidget(self.log_list_widget)
+        column.addWidget(self.logs_card)
 
         column.addStretch(1)
 
@@ -196,15 +232,43 @@ class IntelligencePage(QWidget):
         )
 
     def _toggle_key_row(self) -> None:
-        self.key_row.setVisible(self._selected_provider() in _CLOUD)
+        provider = self._selected_provider()
+        is_cloud = provider in _CLOUD
+        self.key_row.setVisible(is_cloud)
+        self.model_row.setVisible(is_cloud or provider == "ollama")
+
+        if provider in _CLOUD_MODELS:
+            self.model_combo.blockSignals(True)
+            self.model_combo.clear()
+            for model in _CLOUD_MODELS[provider]:
+                self.model_combo.addItem(model, model)
+            
+            if hasattr(self, "_stored_model") and self._stored_model:
+                idx = self.model_combo.findData(self._stored_model)
+                if idx >= 0:
+                    self.model_combo.setCurrentIndex(idx)
+            self.model_combo.blockSignals(False)
+            self.install_button.hide()
+            self.use_local_button.hide()
+        elif provider == "ollama":
+            self.install_button.show()
+            self.use_local_button.show()
+            if hasattr(self, "_last_installed_models"):
+                self._populate_models(self._last_installed_models)
 
     def _selected_provider(self) -> str:
         return _MODES[self.mode_combo.currentIndex()][1]
 
+    def _on_clear_logs(self) -> None:
+        def call():
+            self._window.client.delete_assistant_logs()
+            self._last_refresh = 0.0
+        self._window.run_action(call, "Clearing AI request logs")
+
     # --- data ------------------------------------------------------------
 
     def refresh(self, client, force: bool = False) -> None:
-        """Fetch config + Ollama + hardware; repaint. Never raises.
+        """Fetch config + Ollama + hardware + logs; repaint. Never raises.
 
         Throttled: the window calls this on every poll tick, but one pass
         is four backend calls that probe Ollama. ``force=True`` is the
@@ -217,6 +281,7 @@ class IntelligencePage(QWidget):
         try:
             config = client.assistant_config()
             ollama = client.assistant_ollama()
+            logs_payload = client.get_assistant_logs()
         except ApiUnreachable:
             self._set_light(BAD, "Offline")
             self.status_text.setText(
@@ -228,17 +293,32 @@ class IntelligencePage(QWidget):
             self.status_text.setText(f"Server error: {error}")
             return
         self._apply_config(config, ollama, client)
+        self._apply_logs(logs_payload)
 
     def _apply_config(self, config: dict, ollama: dict, client) -> None:
         self._available = bool(config.get("available"))
         provider = config.get("provider", "none")
+        self._stored_model = config.get("model")
         self._ollama_running = bool(ollama.get("server_running"))
         installed = ollama.get("models") or []
+        self._last_installed_models = installed
 
         # Reflect the active provider in the selector (without firing the
         # apply handler): map backend provider back to a UI row.
         self._select_provider_row(provider)
         self._toggle_key_row()
+        
+        # Capabilities detection line
+        caps = config.get("capabilities", {})
+        if caps:
+            active_caps = [k.replace("_", " ").title() for k, v in caps.items() if v]
+            if active_caps:
+                self.capabilities_chip.setText("Caps: " + ", ".join(active_caps))
+                self.capabilities_chip.show()
+            else:
+                self.capabilities_chip.hide()
+        else:
+            self.capabilities_chip.hide()
 
         # Ollama detection line.
         if not ollama.get("cli_installed") and not self._ollama_running:
@@ -341,7 +421,7 @@ class IntelligencePage(QWidget):
         return value if isinstance(value, int) else None
 
     def _populate_models(self, installed: list) -> None:
-        wanted = self.model_combo.currentData()
+        wanted = self.model_combo.currentData() or self._stored_model
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
         seen = set()
@@ -402,13 +482,84 @@ class IntelligencePage(QWidget):
 
     # --- actions ---------------------------------------------------------
 
+    def _apply_logs(self, logs_payload: dict) -> None:
+        summary = logs_payload.get("summary") or {}
+        logs = logs_payload.get("logs") or []
+        
+        total = summary.get("total_requests", 0)
+        success = summary.get("success_count", 0)
+        tokens = summary.get("total_tokens", 0)
+        cost = summary.get("total_cost_usd", 0.0)
+        
+        rate = (success / total * 100) if total > 0 else 0.0
+        
+        self.log_summary_label.setText(
+            f"Requests: {total}   ·   Success Rate: {rate:.1f}%   ·   "
+            f"Tokens: {tokens:,}   ·   Estimated Cost: ${cost:.6f}"
+        )
+        
+        # Clear old rows
+        for i in reversed(range(self.log_list_layout.count())):
+            widget = self.log_list_layout.itemAt(i).widget()
+            if widget:
+                widget.setParent(None)
+                
+        if not logs:
+            no_logs = QLabel("No requests logged yet.")
+            no_logs.setObjectName("subtitle")
+            self.log_list_layout.addWidget(no_logs)
+            return
+            
+        for log in reversed(logs[-10:]):
+            ts = log.get("timestamp", "")
+            try:
+                ts = ts.replace("T", " ")[:19]
+            except Exception:
+                pass
+            prov = log.get("provider", "")
+            lat = log.get("latency_ms", 0)
+            t_prompt = log.get("prompt_tokens", 0)
+            t_comp = log.get("completion_tokens", 0)
+            ok = log.get("success", False)
+            cost_usd = log.get("cost_usd", 0.0)
+            err = log.get("error")
+            
+            status_str = "SUCCESS" if ok else f"FAILED ({err})"
+            status_color = GOOD if ok else BAD
+            
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(5, 5, 5, 5)
+            
+            lbl_time = QLabel(ts)
+            lbl_time.setFixedWidth(130)
+            lbl_time.setStyleSheet(f"color:{TEXT_DIM};")
+            row_layout.addWidget(lbl_time)
+            
+            lbl_prov = QLabel(prov)
+            lbl_prov.setMinimumWidth(150)
+            row_layout.addWidget(lbl_prov)
+            
+            lbl_stat = QLabel(status_str)
+            lbl_stat.setStyleSheet(f"color:{status_color}; font-weight: bold;")
+            lbl_stat.setMinimumWidth(100)
+            row_layout.addWidget(lbl_stat)
+            
+            lbl_details = QLabel(f"{lat} ms   ·   {t_prompt + t_comp} tokens   ·   ${cost_usd:.6f}")
+            lbl_details.setStyleSheet(f"color:{TEXT_DIM};")
+            row_layout.addWidget(lbl_details)
+            
+            row_layout.addStretch(1)
+            self.log_list_layout.addWidget(row)
+
     def _on_apply_mode(self) -> None:
         provider = self._selected_provider()
         if provider == "auto":
             provider = "ollama" if self._ollama_running else "none"
         if provider in _CLOUD:
             key = self.key_edit.text().strip()
-            self._call_set(provider, api_key=key or None)
+            model = self.model_combo.currentData()
+            self._call_set(provider, model=model, api_key=key or None)
             self.key_edit.clear()
         elif provider == "ollama":
             self._on_use_local()

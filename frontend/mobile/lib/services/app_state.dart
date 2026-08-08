@@ -37,7 +37,7 @@ class SettingsSaveResult {
 class AppState extends ChangeNotifier {
   final SettingsService _store;
   Settings settings;
-  ApiClient client;
+
 
   DashboardData? dashboard;
   List<ResourceItem> resources = [];
@@ -75,19 +75,44 @@ class AppState extends ChangeNotifier {
   /// client factory instead and leave this null, keeping their path.
   final Future<Connection> Function(Settings settings)? connectionResolver;
 
+  late final ValueNotifier<bool> onboardingCompleted;
+
   AppState(
     this._store, {
     ApiClient Function(String url)? clientFactory,
     this.connectionResolver,
   })  : settings = _store.read(),
-        client = (clientFactory ?? ApiClient.new)(_store.read().baseUrl),
-        queue = OfflineQueue(_store),
-        _clientFactory = clientFactory ?? ApiClient.new {
+        _customClientFactory = clientFactory,
+        queue = OfflineQueue(_store) {
+    onboardingCompleted = ValueNotifier<bool>(settings.onboardingCompleted);
+    client = _createClient(settings.baseUrl);
     client.authToken = settings.deviceToken;
     _restoreCaches();
   }
 
-  final ApiClient Function(String url) _clientFactory;
+  final ApiClient Function(String url)? _customClientFactory;
+  late ApiClient client;
+  bool _disposed = false;
+
+
+
+  @override
+  void notifyListeners() {
+    if (_disposed) return;
+    super.notifyListeners();
+  }
+
+  ApiClient _createClient(String url) {
+    final factory = _customClientFactory;
+    if (factory != null) {
+      return factory(url);
+    }
+    return ApiClient(
+      url,
+      timeout: Duration(seconds: settings.requestTimeoutSeconds),
+      aiTimeoutSetting: Duration(seconds: settings.aiTimeoutSeconds),
+    );
+  }
 
   /// The theme, published on its own channel.
   ///
@@ -385,7 +410,7 @@ class AppState extends ChangeNotifier {
       await resolveConnection(); // re-pick LAN/relay with the new settings
     } else {
       final previous = client;
-      client = _clientFactory(updated.baseUrl);
+      client = _createClient(updated.baseUrl);
       client.authToken = updated.deviceToken; // M21: pairing state follows
       _retire(previous);
     }
@@ -403,8 +428,24 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  Future<void> completeOnboarding() async {
+    settings.onboardingCompleted = true;
+    await _store.write(settings);
+    onboardingCompleted.value = true;
+    notifyListeners();
+  }
+
+  Future<void> restartOnboarding() async {
+    settings.onboardingCompleted = false;
+    await _store.write(settings);
+    onboardingCompleted.value = false;
+    notifyListeners();
+  }
+
   @override
   void dispose() {
+    _disposed = true;
+    onboardingCompleted.dispose();
     stopPolling();
     _closeRetired();
     client.close();

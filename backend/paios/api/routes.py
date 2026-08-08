@@ -11,7 +11,9 @@ scheduler, decision-engine, learning, or repository-implementation
 module is imported.
 """
 
+import json
 import os
+from pathlib import Path
 import threading
 from datetime import timedelta
 
@@ -489,11 +491,19 @@ class ApiRouter:
     # --- assistant (M20: proposals and explanations ONLY) ----------------------
 
     def _get_assistant_status(self, params, body):
+        caps = {}
+        if self._assistant and hasattr(self._assistant, "orchestrator") and hasattr(self._assistant.orchestrator, "get_capabilities"):
+            caps = self._assistant.orchestrator.get_capabilities()
+        elif self._assistant and hasattr(self._assistant, "get_capabilities"):
+            caps = self._assistant.get_capabilities()
+        elif self._assistant and hasattr(self._assistant, "_manager") and hasattr(self._assistant._manager, "get_capabilities"):
+            caps = self._assistant._manager.get_capabilities()
         return 200, {
             "provider": self._assistant_provider,
             "available": self._assistant is not None,
             "fallback": "heuristic",
             "reason": self._assistant_reason,
+            "capabilities": caps,
         }
 
     # --- intelligence layer: setup + settings (transport concern) ----------
@@ -502,6 +512,17 @@ class ApiRouter:
         if self._ai_dir is None:
             raise ApiError(503, "AI settings are not composed")
         return self._ai_dir
+
+    def _get_assistant_providers(self, params, body):
+        providers_list = {}
+        if self._assistant:
+            # We have composed the orchestrator, let's query the manager if available
+            mgr = getattr(self._assistant, "_adapter", None)
+            if mgr and hasattr(mgr, "list_providers"):
+                providers_list = mgr.list_providers()
+            elif hasattr(self._assistant, "list_providers"):
+                providers_list = self._assistant.list_providers()
+        return 200, {"providers": providers_list}
 
     def _get_assistant_setup(self, params, body):
         """Hardware, model recommendations and Ollama state — the one
@@ -528,6 +549,11 @@ class ApiRouter:
     def _get_assistant_config(self, params, body):
         ai_dir = self._require_ai_dir()
         stored = ai_settings.load(ai_dir)
+        caps = {}
+        if self._assistant:
+            mgr = getattr(self._assistant, "orchestrator", None) or getattr(self._assistant, "_manager", None)
+            if mgr and hasattr(mgr, "get_capabilities"):
+                caps = mgr.get_capabilities()
         return 200, {
             "provider": self._assistant_provider,
             "model": stored.get("model"),
@@ -539,6 +565,7 @@ class ApiRouter:
             "env_override": bool(os.environ.get("PAIOS_AI_PROVIDER")),
             "available": self._assistant is not None,
             "reason": self._assistant_reason,
+            "capabilities": caps,
         }
 
     def _put_assistant_config(self, params, body):
@@ -576,13 +603,19 @@ class ApiRouter:
             self._assistant,
             self._assistant_reason,
         ) = assistant_support.compose_assistant(
-            provider, model, api_key=stored_key
+            provider, model, api_key=stored_key, data_dir=ai_dir
         )
+        caps = {}
+        if self._assistant:
+            mgr = getattr(self._assistant, "orchestrator", None) or getattr(self._assistant, "_manager", None)
+            if mgr and hasattr(mgr, "get_capabilities"):
+                caps = mgr.get_capabilities()
         payload = {
             "provider": self._assistant_provider,
             "available": self._assistant is not None,
             "fallback": "heuristic",
             "reason": self._assistant_reason,
+            "capabilities": caps,
         }
         if key_warning:
             payload["warning"] = key_warning
@@ -618,6 +651,55 @@ class ApiRouter:
             "adapter": result.adapter,
             "answer": result.answer,
         }
+
+    def _get_assistant_logs(self, params, body):
+        ai_dir = self._require_ai_dir()
+        log_file = Path(ai_dir) / "ai_request_logs.json"
+        logs = []
+        if log_file.exists():
+            try:
+                logs = json.loads(log_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        
+        # Calculate summary
+        total_requests = len(logs)
+        success_count = sum(1 for log in logs if log.get("success", False))
+        failure_count = total_requests - success_count
+        total_tokens = sum(
+            log.get("prompt_tokens", 0) + log.get("completion_tokens", 0)
+            for log in logs
+        )
+        total_cost_usd = sum(log.get("cost_usd", 0.0) for log in logs)
+        
+        costs_by_provider = {}
+        for log in logs:
+            prov = log.get("provider", "unknown")
+            costs_by_provider[prov] = costs_by_provider.get(prov, 0.0) + log.get("cost_usd", 0.0)
+            
+        return 200, {
+            "summary": {
+                "total_requests": total_requests,
+                "success_count": success_count,
+                "failure_count": failure_count,
+                "total_tokens": total_tokens,
+                "total_cost_usd": round(total_cost_usd, 6),
+                "costs_by_provider": {
+                    prov: round(val, 6) for prov, val in costs_by_provider.items()
+                }
+            },
+            "logs": logs
+        }
+
+    def _delete_assistant_logs(self, params, body):
+        ai_dir = self._require_ai_dir()
+        log_file = Path(ai_dir) / "ai_request_logs.json"
+        try:
+            if log_file.exists():
+                log_file.unlink()
+        except Exception as e:
+            raise ApiError(500, f"Could not delete logs: {e}")
+        return 200, {"deleted": True}
 
     # --- intelligence layer: daily-rhythm workflows ------------------------
     # Read-only observations in both paths (LLM or deterministic); the
@@ -1439,6 +1521,7 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("POST", ("inbox", "{id}", "archive"), ApiRouter._post_inbox_archive),
     ("DELETE", ("inbox", "{id}"), ApiRouter._delete_inbox),
     ("GET", ("assistant", "status"), ApiRouter._get_assistant_status),
+    ("GET", ("assistant", "providers"), ApiRouter._get_assistant_providers),
     ("POST", ("assistant", "plan"), ApiRouter._post_assistant_plan),
     (
         "POST",
@@ -1466,6 +1549,8 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("GET", ("assistant", "config"), ApiRouter._get_assistant_config),
     ("PUT", ("assistant", "config"), ApiRouter._put_assistant_config),
     ("POST", ("assistant", "test"), ApiRouter._post_assistant_test),
+    ("GET", ("assistant", "logs"), ApiRouter._get_assistant_logs),
+    ("DELETE", ("assistant", "logs"), ApiRouter._delete_assistant_logs),
     (
         "POST",
         ("assistant", "morning-plan"),
@@ -1544,6 +1629,7 @@ CONCURRENT_PATHS: frozenset[tuple[str, ...]] = frozenset(
     {
         ("assistant", "test"),
         ("assistant", "setup"),
+        ("assistant", "providers"),
         ("assistant", "ollama"),
         ("assistant", "ollama", "pull"),
         ("assistant", "ollama", "remove"),

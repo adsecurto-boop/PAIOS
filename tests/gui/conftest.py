@@ -36,8 +36,10 @@ def qapp():
 
 
 @pytest.fixture
-def live_server(tmp_path):
+def live_server(tmp_path, monkeypatch):
     """A real ApiServer over a seeded application, on an ephemeral port."""
+    monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("PAIOS_AI_MODEL", raising=False)
     data_dir = tmp_path / "data"
     factory = RepositoryFactory(data_dir)
     factory.initialize()

@@ -52,7 +52,7 @@ class RestListScreenState extends State<RestListScreen> {
     } on ApiUnreachableException catch (e) {
       if (!mounted) return;
       if (!_restoreFromCache()) {
-        setState(() => error = 'Server unreachable: ${e.detail}');
+        setState(() => error = e.toString());
       }
     } on ApiResponseException catch (e) {
       if (!mounted) return;

@@ -14,7 +14,7 @@ EVENTS_ROW = 6  # nav index of the Events page
 
 class TestEventDialog:
     def test_bare_title_sends_no_metadata(self, qapp):
-        dialog = EventDialog()
+        dialog = EventDialog(projects=[])
         dialog.title_edit.setText("Just a title")
         values = dialog.values()
         assert values == {
@@ -31,7 +31,8 @@ class TestEventDialog:
         )
 
     def test_filled_form_builds_the_metadata_block(self, qapp):
-        dialog = EventDialog()
+        projects = [{"project_id": "proj_1", "name": "Project 1"}]
+        dialog = EventDialog(projects=projects)
         dialog.title_edit.setText("Deep work")
         dialog.when.set_iso("2026-07-23T09:00:00")
         dialog.priority.setValue(2.0)
@@ -39,7 +40,7 @@ class TestEventDialog:
         dialog.energy.setCurrentText("high")
         dialog.tags_edit.setText("focus, study ")
         dialog.deadline.set_iso("2026-07-24T18:00:00")
-        dialog.project_edit.setText("proj_1")
+        dialog.project_combo.setCurrentIndex(1)  # Select Project 1
         values = dialog.values()
         assert values["suggested_time"] == "2026-07-23T09:00:00"
         assert values["priority"] == 2.0
@@ -52,11 +53,13 @@ class TestEventDialog:
         }
 
     def test_prefill_round_trips(self, qapp):
-        dialog = EventDialog()
+        projects = [{"project_id": "proj_1", "name": "Project 1"}]
+        dialog = EventDialog(projects=projects)
         dialog.prefill(
             {
                 "description": "Old title",
                 "start_time": "2026-07-22T10:00:00",
+                "project_id": "proj_1",
             },
             {
                 "estimated_duration_minutes": 30,
@@ -68,6 +71,7 @@ class TestEventDialog:
         values = dialog.values()
         assert values["title"] == "Old title"
         assert values["suggested_time"] == "2026-07-22T10:00:00"
+        assert values["project_id"] == "proj_1"
         assert values["metadata"]["estimated_duration_minutes"] == 30
         assert values["metadata"]["tags"] == ["a", "b"]
 

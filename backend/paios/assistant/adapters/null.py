@@ -8,10 +8,17 @@ pipeline runnable end to end with zero network and zero dependencies.
 
 import json
 
-from paios.assistant.adapters import LlmAdapter
+from paios.assistant.adapters import AIProvider, ProviderCapabilities
 
 
-class NullAdapter(LlmAdapter):
+class NullAdapter(AIProvider):
+    def health_check(self) -> tuple[bool, str]:
+        return True, "Ready"
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(offline=True)
+
     @property
     def name(self) -> str:
         return "null"

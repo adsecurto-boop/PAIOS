@@ -10,6 +10,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/models.dart';
 import '../services/api_client.dart';
@@ -80,6 +81,11 @@ class _PlanningScreenState extends State<PlanningScreen> {
   Map<String, EventItem> _events = {};
   List<DayReason> _headerReasons = [];
   Timer? _ticker;
+  Timer? _proposingTextTimer;
+  Timer? _proposingTimeoutTimer;
+  http.Client? _activePlanClient;
+  bool _planCancelled = false;
+  String _proposingStateText = '';
 
   DateTime get _now => (widget.now ?? DateTime.now)();
 
@@ -99,6 +105,9 @@ class _PlanningScreenState extends State<PlanningScreen> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _proposingTextTimer?.cancel();
+    _proposingTimeoutTimer?.cancel();
+    _activePlanClient?.close();
     _text.dispose();
     super.dispose();
   }
@@ -263,10 +272,107 @@ class _PlanningScreenState extends State<PlanningScreen> {
   Future<void> _propose() async {
     final text = _text.text.trim();
     if (text.isEmpty || _proposing) return;
-    setState(() => _proposing = true);
+
+    // Early check: ensure backend is reachable before starting AI request.
     try {
-      final payload = await widget.state.client.assistantPlan(text);
-      if (!mounted) return;
+      await widget.state.client.getStatus();
+    } on ApiUnreachableException {
+      // Backend unreachable – inform user and abort.
+      _snack('Unable to connect to backend.', retry: _propose);
+      return;
+    } catch (_) {
+      // Other errors – proceed with AI request.
+    }
+
+    setState(() {
+      _proposing = true;
+      _proposingStateText = 'Connecting...';
+    });
+
+
+
+
+    _planCancelled = false;
+    _activePlanClient = widget.state.client.httpClientFactory();
+
+    int ticks = 0;
+    _proposingTextTimer?.cancel();
+    _proposingTextTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+      if (!mounted || !_proposing || _planCancelled) {
+        timer.cancel();
+        return;
+      }
+      ticks++;
+      final elapsed = ticks * 0.2;
+      String newText;
+      if (elapsed >= 15) {
+        newText = 'Still thinking... Local AI models can take a little longer.';
+      } else if (elapsed >= 8) {
+        newText = 'Generating plan...';
+      } else if (elapsed >= 2) {
+        newText = 'Analyzing your request...';
+      } else {
+        newText = 'Connecting...';
+      }
+      if (_proposingStateText != newText) {
+        setState(() {
+          _proposingStateText = newText;
+        });
+      }
+      print("TIMER TICK: elapsed=$elapsed, newText=$newText, currentText=$_proposingStateText");
+    });
+
+    void startTimeoutTimer() {
+      final timeoutDuration = Duration(seconds: widget.state.settings.aiTimeoutSeconds);
+      if (timeoutDuration.inSeconds <= 0) return; // Unlimited
+
+      _proposingTimeoutTimer?.cancel();
+      _proposingTimeoutTimer = Timer(timeoutDuration, () async {
+        if (!mounted || !_proposing || _planCancelled) return;
+
+        final bool? continueWaiting = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => AlertDialog(
+            title: const Text('Still waiting for the local AI'),
+            content: const Text('Would you like to continue waiting?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(false), // Cancel
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(true), // Continue
+                child: const Text('Continue Waiting'),
+              ),
+            ],
+          ),
+        );
+
+        if (continueWaiting == true) {
+          startTimeoutTimer();
+        } else {
+          _planCancelled = true;
+          _activePlanClient?.close();
+          if (mounted) {
+            setState(() {
+              _proposing = false;
+            });
+          }
+        }
+      });
+    }
+
+    startTimeoutTimer();
+
+    try {
+      final payload = await widget.state.client.assistantPlan(
+        text,
+        customClient: _activePlanClient,
+      );
+
+      if (!mounted || _planCancelled) return;
+
       setState(() {
         _proposals =
             ProposalItem.listFrom(payload).map(_Proposal.new).toList();
@@ -280,13 +386,30 @@ class _PlanningScreenState extends State<PlanningScreen> {
             : null;
       });
     } on ApiUnreachableException catch (e) {
-      _snack('Server unreachable: ${e.detail}', retry: _propose);
+      if (!_planCancelled) {
+        _snack('Unable to connect to backend.', retry: _propose);
+      }
+    } on ApiTimeoutException catch (e) {
+      if (!_planCancelled) {
+        _snack(e.toString(), retry: _propose);
+      }
     } on ApiResponseException catch (e) {
-      _snack(e.message, retry: _propose);
+      if (!_planCancelled) {
+        _snack(e.message, retry: _propose);
+      }
     } catch (e) {
-      _snack('$e');
+      if (!_planCancelled) {
+        _snack('$e');
+      }
     } finally {
-      if (mounted) setState(() => _proposing = false);
+      _proposingTextTimer?.cancel();
+      _proposingTimeoutTimer?.cancel();
+      _activePlanClient = null;
+      if (mounted) {
+        setState(() {
+          _proposing = false;
+        });
+      }
     }
   }
 
@@ -353,7 +476,7 @@ class _PlanningScreenState extends State<PlanningScreen> {
         _review = null; // one result panel at a time
       });
     } on ApiUnreachableException catch (e) {
-      _snack('Server unreachable: ${e.detail}', retry: _explainDay);
+      _snack(e.toString(), retry: _explainDay);
     } on ApiResponseException catch (e) {
       _snack(e.message, retry: _explainDay);
     } catch (e) {
@@ -489,6 +612,7 @@ class _PlanningScreenState extends State<PlanningScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: _text,
+                  enabled: !_proposing,
                   minLines: 3,
                   maxLines: 8,
                   textInputAction: TextInputAction.newline,
@@ -497,6 +621,28 @@ class _PlanningScreenState extends State<PlanningScreen> {
                     border: OutlineInputBorder(),
                   ),
                 ),
+                if (_proposing) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          _proposingStateText,
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            color: theme.colorScheme.primary,
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 12),
                 SizedBox(
                   width: double.infinity,
@@ -542,7 +688,7 @@ class _PlanningScreenState extends State<PlanningScreen> {
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
-              onPressed: checkedCount == 0 || _applying ? null : _approve,
+              onPressed: checkedCount == 0 || _applying || _proposing ? null : _approve,
               icon: _busyIcon(_applying, Icons.done_all),
               label: Text('Approve ($checkedCount)'),
             ),
@@ -563,12 +709,12 @@ class _PlanningScreenState extends State<PlanningScreen> {
                   runSpacing: 8,
                   children: [
                     OutlinedButton.icon(
-                      onPressed: _explaining ? null : _explainDay,
+                      onPressed: _explaining || _proposing ? null : _explainDay,
                       icon: _busyIcon(_explaining, Icons.wb_sunny_outlined),
                       label: const Text('Explain My Schedule'),
                     ),
                     OutlinedButton.icon(
-                      onPressed: _reviewToday,
+                      onPressed: _proposing ? null : _reviewToday,
                       icon: const Icon(Icons.fact_check_outlined, size: 18),
                       label: const Text('Review Today'),
                     ),
@@ -628,8 +774,9 @@ class _PlanningScreenState extends State<PlanningScreen> {
         children: [
           CheckboxListTile(
             value: proposal.checked,
-            onChanged: (value) =>
-                setState(() => proposal.checked = value == true),
+            onChanged: _proposing
+                ? null
+                : (value) => setState(() => proposal.checked = value == true),
             controlAffinity: ListTileControlAffinity.leading,
             title: Text(proposal.item.title),
             subtitle: Column(
@@ -652,7 +799,7 @@ class _PlanningScreenState extends State<PlanningScreen> {
                       label: Text(proposal.kind),
                       tooltip: 'Tap to change kind',
                       visualDensity: VisualDensity.compact,
-                      onPressed: () => _cycleKind(proposal),
+                      onPressed: _proposing ? null : () => _cycleKind(proposal),
                     ),
                     if (proposal.item.dayScope != null)
                       Chip(

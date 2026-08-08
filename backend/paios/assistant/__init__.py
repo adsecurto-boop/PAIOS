@@ -16,6 +16,7 @@ It never mutates, persists, or triggers anything.
 from paios.assistant.adapters import (
     AdapterError,
     AdapterUnavailableError,
+    AIProvider,
     LlmAdapter,
 )
 from paios.assistant.adapters.null import NullAdapter
@@ -30,6 +31,7 @@ from paios.assistant.tools import AssistantTask, SnapshotComparison
 __all__ = [
     "AdapterError",
     "AdapterUnavailableError",
+    "AIProvider",
     "AssistantOrchestrator",
     "AssistantRequest",
     "AssistantResult",

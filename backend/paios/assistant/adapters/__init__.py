@@ -9,6 +9,7 @@ adapter (AdapterUnavailableError), exactly like M14's DesktopProvider.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # import only for type checkers; no runtime cycle
@@ -33,3 +34,30 @@ class LlmAdapter(ABC):
     def complete(self, request: "AssistantRequest") -> str:
         """One request -> the model's raw text. Raise AdapterError on
         failure; never return partial or invented content."""
+
+
+@dataclass(frozen=True)
+class ProviderCapabilities:
+    streaming: bool = False
+    vision: bool = False
+    tool_calling: bool = False
+    thinking: bool = False
+    offline: bool = False
+    embeddings: bool = False
+    planning: bool = True
+    image_generation: bool = False
+    audio: bool = False
+
+
+class AIProvider(LlmAdapter):
+    @abstractmethod
+    def health_check(self) -> tuple[bool, str]:
+        """Verify the provider connection and settings.
+        Returns:
+            (is_healthy, description_or_reason)
+        """
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities()
+

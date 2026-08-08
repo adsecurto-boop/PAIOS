@@ -1,13 +1,18 @@
 // Milestone 20 widget tests: planning propose/approve, quick capture,
 // inbox swipe actions, timeline buckets (fixed clock), the create-event
 // form, and the offline cache.
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:paios_mobile/main.dart';
 import 'package:paios_mobile/screens/planning_screen.dart';
 import 'package:paios_mobile/screens/timeline_screen.dart';
+import 'package:paios_mobile/services/api_client.dart';
 import 'package:paios_mobile/services/app_state.dart';
 import 'package:paios_mobile/services/settings_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -230,10 +235,37 @@ void main() {
     expect(body['title'], 'Ship it again');
     expect(body.containsKey('suggested_time'), isFalse);
     expect(body.containsKey('priority'), isFalse);
+    expect(body.containsKey('project_id'), isFalse);
     expect(body['metadata'], {
       'tags': ['work', 'focus'],
       'estimated_duration_minutes': 45,
     });
+    state.dispose();
+  });
+
+  testWidgets('event form includes project selector',
+      (tester) async {
+    final log = RequestLog();
+    final state = await makeState(log);
+    await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Events').last);
+    await tester.pumpAndSettle();
+
+    // Open event form
+    await tester.tap(find.byType(FloatingActionButton));
+    await tester.pumpAndSettle();
+    
+    // Wait for projects to be fetched (async call in showEventForm)
+    await tester.pumpAndSettle();
+    
+    // Verify project dropdown exists and shows "No Project" by default
+    expect(find.text('Project'), findsOneWidget);
+    expect(find.text('— No Project —'), findsOneWidget);
+    
     state.dispose();
   });
 
@@ -369,8 +401,86 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Quick Capture').last);
     await tester.pumpAndSettle();
-    expect(find.textContaining('Server unreachable'), findsOneWidget);
+    expect(find.textContaining('Unable to connect to backend.'), findsOneWidget);
     expect(tester.takeException(), isNull);
+    state.dispose();
+  });
+
+  testWidgets('planning: AI proposal loading states, timeout dialog, and cancellation',
+      (tester) async {
+    final log = RequestLog();
+    final completer = Completer<http.Response>();
+
+    final mockHttpClient = MockClient((request) async {
+      log.requests.add('${request.method} ${request.url.path}');
+      if (request.url.path == '/status') {
+        return http.Response(jsonEncode({'status': 'ok'}), 200);
+      }
+      if (request.method == 'POST' || request.method == 'PUT') {
+        log.bodies.add(request.body);
+      }
+      return completer.future;
+    });
+
+    SharedPreferences.setMockInitialValues({});
+    final store = SettingsService(await SharedPreferences.getInstance());
+    final settings = store.read().copyWith(aiTimeoutSeconds: 10);
+    await store.write(settings);
+
+    final state = AppState(store, clientFactory: (url) {
+      return ApiClient(url,
+          client: mockHttpClient,
+          timeout: const Duration(seconds: 30),
+          aiTimeoutSetting: const Duration(seconds: 30));
+    });
+
+    await tester.pumpWidget(PaiosApp(state: state, startPolling: false));
+    await tester.pumpAndSettle();
+
+    // Type a prompt and plan it
+    await tester.enterText(find.byType(TextField).first, 'test long running AI');
+    await tester.tap(find.text('Plan it'));
+    await tester.pump(); // allow UI to update
+    await tester.pump(const Duration(milliseconds: 100));
+    // 1. Immediately: "Connecting..."
+    expect(find.text('Connecting...'), findsOneWidget);
+    expect(tester.widget<TextField>(find.byType(TextField).first).enabled, isFalse);
+
+    // 2. Advance by 2 seconds: "Analyzing your request..."
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('Analyzing your request...'), findsOneWidget);
+
+    // 3. Advance by 6 seconds (total 8s): "Generating plan..."
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.text('Generating plan...'), findsOneWidget);
+
+    // 4. Advance by 2 seconds (total 10s) -> timeout dialog triggers
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('Still waiting for the local AI'), findsOneWidget);
+
+    // 5. Click "Continue Waiting"
+    await tester.tap(find.text('Continue Waiting'));
+    await tester.pump();
+    expect(find.text('Still waiting for the local AI'), findsNothing);
+
+    // 6. Advance by 6 seconds (total 16s): "Still thinking..."
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.textContaining('Still thinking...'), findsOneWidget);
+
+    // 7. Advance by 4 seconds (total 20s, another 10s dialog step) -> timeout triggers again
+    await tester.pump(const Duration(seconds: 4));
+    expect(find.text('Still waiting for the local AI'), findsOneWidget);
+
+    // 8. Click "Cancel" to abort
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+
+    // Controls should be re-enabled
+    expect(find.text('Still waiting for the local AI'), findsNothing);
+    expect(tester.widget<TextField>(find.byType(TextField).first).enabled, isTrue);
+
+    // Clean up
+    completer.complete(http.Response('{}', 200));
     state.dispose();
   });
 }

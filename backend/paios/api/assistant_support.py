@@ -10,7 +10,10 @@ assistant package. Two rules hold everywhere in this module:
        Planning Workspace works with no SDK, no key, no network.
 """
 
+import datetime
+import json
 import os
+from pathlib import Path
 
 from paios.assistant.adapters import AdapterError, LlmAdapter
 from paios.assistant.adapters.null import NullAdapter
@@ -20,12 +23,12 @@ from paios.planning.classifier import classify_lines
 
 #: Providers the transport can compose. "ollama" is the free, private,
 #: local default of the intelligence layer; cloud providers are opt-in.
-PROVIDERS = ("none", "null", "ollama", "anthropic", "openai")
+PROVIDERS = ("none", "null", "ollama", "anthropic", "openai", "gemini")
 
 #: How to turn a real provider on (shown in logs and /assistant/status).
 CONFIG_HINT = (
-    "choose an intelligence mode in Settings (local Ollama, OpenAI or"
-    " Anthropic), or set PAIOS_AI_PROVIDER=ollama|openai|anthropic —"
+    "choose an intelligence mode in Settings (local Ollama, Google Gemini, OpenAI or"
+    " Anthropic), or set PAIOS_AI_PROVIDER=ollama|openai|anthropic|gemini —"
     " cloud providers also need their API key"
 )
 
@@ -36,43 +39,173 @@ def resolve_provider(config_provider: str) -> str:
     return provider if provider in PROVIDERS else "none"
 
 
+def calculate_cost(provider_name: str, prompt_tokens: int, completion_tokens: int) -> float:
+    p = provider_name.lower()
+    input_rate = 0.0
+    output_rate = 0.0
+
+    if "openai" in p or "gpt" in p:
+        input_rate = 2.50 / 1_000_000
+        output_rate = 10.00 / 1_000_000
+    elif "anthropic" in p or "claude" in p:
+        if "opus" in p:
+            input_rate = 15.00 / 1_000_000
+            output_rate = 75.00 / 1_000_000
+        else:
+            input_rate = 3.00 / 1_000_000
+            output_rate = 15.00 / 1_000_000
+    elif "gemini" in p:
+        if "pro" in p:
+            input_rate = 1.25 / 1_000_000
+            output_rate = 5.00 / 1_000_000
+        else:
+            input_rate = 0.075 / 1_000_000
+            output_rate = 0.30 / 1_000_000
+
+    return (prompt_tokens * input_rate) + (completion_tokens * output_rate)
+
+
+def log_request(data_dir: str | Path | None, log_entry: dict) -> None:
+    if not data_dir:
+        return
+    log_file = Path(data_dir) / "ai_request_logs.json"
+    cost = calculate_cost(
+        log_entry.get("provider", ""),
+        log_entry.get("prompt_tokens", 0),
+        log_entry.get("completion_tokens", 0),
+    )
+    entry = {
+        "timestamp": datetime.datetime.now().isoformat(),
+        "provider": log_entry.get("provider"),
+        "latency_ms": log_entry.get("latency_ms"),
+        "prompt_tokens": log_entry.get("prompt_tokens"),
+        "completion_tokens": log_entry.get("completion_tokens"),
+        "success": log_entry.get("success"),
+        "error": log_entry.get("error"),
+        "cost_usd": cost,
+    }
+    try:
+        if log_file.exists():
+            try:
+                logs = json.loads(log_file.read_text(encoding="utf-8"))
+                if not isinstance(logs, list):
+                    logs = []
+            except Exception:
+                logs = []
+        else:
+            logs = []
+        logs.append(entry)
+        if len(logs) > 1000:
+            logs = logs[-1000:]
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.write_text(json.dumps(logs, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _construct(
-    provider: str, model: str | None, api_key: str | None = None
+    provider: str,
+    model: str | None,
+    api_key: str | None = None,
+    data_dir: str | None = None,
 ) -> AssistantOrchestrator | None:
     """The one construction path; raises AdapterError when the chosen
     provider's SDK, key or server is absent, returns None for "none"."""
-    if provider == "null":
-        return AssistantOrchestrator(NullAdapter())
-    if provider == "ollama":
-        from paios.assistant.adapters.ollama import OllamaAdapter
+    if provider == "none":
+        return None
 
-        kwargs = {"model": model} if model else {}
-        return AssistantOrchestrator(OllamaAdapter(**kwargs))
-    if provider == "anthropic":
+    providers_map = {}
+    log_cb = lambda entry: log_request(data_dir, entry)
+
+    # 1. Null
+    try:
+        providers_map["null"] = NullAdapter()
+    except Exception:
+        pass
+
+    # Helper function to get stored keys for cloud providers
+    from paios.api import ai_settings
+    def get_key(prov_name):
+        if prov_name == provider and api_key:
+            return api_key
+        if data_dir:
+            resolved = resolve_provider(prov_name)
+            return ai_settings.api_key_for(data_dir, resolved)
+        return None
+
+    # 2. Ollama
+    try:
+        from paios.assistant.adapters.ollama import OllamaProvider
+        # Only pass model if ollama is the active provider
+        ollama_model = model if provider == "ollama" else None
+        kwargs = {"model": ollama_model} if ollama_model else {}
+        providers_map["ollama"] = OllamaProvider(**kwargs)
+    except Exception:
+        pass
+
+    # 3. Gemini
+    try:
+        from paios.assistant.adapters.gemini import GeminiProvider
+        gem_key = get_key("gemini")
+        if gem_key:
+            gem_model = model if provider == "gemini" else None
+            kwargs = {"model": gem_model} if gem_model else {}
+            kwargs["api_key"] = gem_key
+            providers_map["gemini"] = GeminiProvider(**kwargs)
+    except Exception:
+        pass
+
+    # 4. Anthropic
+    try:
         from paios.assistant.adapters.anthropic import AnthropicAdapter
+        ant_key = get_key("anthropic")
+        if ant_key:
+            ant_model = model if provider == "anthropic" else None
+            kwargs = {"model": ant_model} if ant_model else {}
+            kwargs["api_key"] = ant_key
+            providers_map["anthropic"] = AnthropicAdapter(**kwargs)
+    except Exception:
+        pass
 
-        kwargs = {"model": model} if model else {}
-        if api_key:
-            kwargs["api_key"] = api_key
-        return AssistantOrchestrator(AnthropicAdapter(**kwargs))
-    if provider == "openai":
+    # 5. OpenAI
+    try:
         from paios.assistant.adapters.openai import OpenAIAdapter
+        oai_key = get_key("openai")
+        if oai_key:
+            oai_model = model if provider == "openai" else None
+            kwargs = {"model": oai_model} if oai_model else {}
+            kwargs["api_key"] = oai_key
+            providers_map["openai"] = OpenAIAdapter(**kwargs)
+    except Exception:
+        pass
 
-        kwargs = {"model": model} if model else {}
-        if api_key:
-            kwargs["api_key"] = api_key
-        return AssistantOrchestrator(OpenAIAdapter(**kwargs))
-    return None
+    fallback_chain = []
+    if provider not in providers_map:
+        if provider == "gemini" and "ollama" in providers_map:
+            fallback_chain = ["ollama"]
+        else:
+            raise AdapterError(f"AI Provider {provider!r} could not be initialized (missing SDK, server, or API key).")
+
+    from paios.assistant.provider_manager import ProviderManager
+    manager = ProviderManager(
+        active_provider_name=provider,
+        providers=providers_map,
+        log_callback=log_cb,
+        fallback_chain=fallback_chain,
+    )
+    return AssistantOrchestrator(manager)
 
 
 def build_orchestrator(
-    provider: str, model: str | None = None
+    provider: str,
+    model: str | None = None,
+    data_dir: str | None = None,
 ) -> AssistantOrchestrator | None:
     """None when provider is "none" or its SDK/key is absent — callers
     fall back to the deterministic path."""
     model = os.environ.get("PAIOS_AI_MODEL", model or None) or None
     try:
-        return _construct(provider, model)
+        return _construct(provider, model, data_dir=data_dir)
     except AdapterError:
         return None
 
@@ -81,6 +214,7 @@ def compose_assistant(
     config_provider: str,
     config_model: str | None = None,
     api_key: str | None = None,
+    data_dir: str | None = None,
 ) -> tuple[str, AssistantOrchestrator | None, str]:
     """(provider, orchestrator-or-None, human-readable reason).
 
@@ -95,9 +229,19 @@ def compose_assistant(
             f"no AI provider configured: {CONFIG_HINT}",
         )
     try:
-        orchestrator = _construct(provider, model, api_key)
+        orchestrator = _construct(provider, model, api_key, data_dir)
     except AdapterError as error:
         return provider, None, str(error)
+
+    if orchestrator and hasattr(orchestrator, "_adapter"):
+        manager = orchestrator._adapter
+        from paios.assistant.provider_manager import ProviderManager
+        if isinstance(manager, ProviderManager) and manager.get_active_provider() is None:
+            if "ollama" in manager._providers:
+                return provider, orchestrator, f"{provider} is unavailable, falling back to Ollama"
+            else:
+                return provider, None, f"{provider} is unavailable and no fallback is ready"
+
     return provider, orchestrator, f"{provider} adapter ready"
 
 

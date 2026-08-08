@@ -512,3 +512,148 @@ class TestModelInfo:
             {"model": "llama3.1:8b"},
         )
         assert payload["context_length"] == 8192
+
+
+def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
+    # 1. Mock Gemini transport to succeed
+    def fake_gemini_transport(url, payload, headers, timeout):
+        if "generateContent" in url:
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "text": '{"answer": "Hi, I am Gemini.", "bullets": [], "confidence": 1.0}'
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        return {}
+    
+    monkeypatch.setattr(
+        "paios.assistant.adapters.gemini.default_transport",
+        fake_gemini_transport
+    )
+    monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    ai_dir = tmp_path / "ai-data"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+
+    # 2. Build initial router (no assistant active initially)
+    router1 = ApiRouter(
+        api_app,
+        planning=PlanningService(tmp_path / "planning-data"),
+        backups=BackupManager(tmp_path / "data", tmp_path / "backups"),
+        assistant=None,
+        assistant_provider="none",
+        ai_dir=ai_dir,
+    )
+
+    # 3. Save Gemini provider, model, and API key via PUT config
+    put_payload = ok(
+        router1, "PUT", "/assistant/config",
+        {
+            "provider": "gemini",
+            "model": "gemini-2.5-pro",
+            "api_key": "my-secret-gemini-key"
+        }
+    )
+    assert put_payload["available"] is True
+    assert put_payload["provider"] == "gemini"
+
+    # 4. Simulate a restart: load from settings just like server.py does
+    stored = ai_settings.load(ai_dir)
+    assert stored.get("provider") == "gemini"
+    assert stored.get("model") == "gemini-2.5-pro"
+    
+    # Verify the key is stored protected and can be retrieved
+    stored_key = ai_settings.api_key_for(ai_dir, "gemini")
+    assert stored_key == "my-secret-gemini-key"
+
+    # Compose assistant for the new startup instance
+    provider_default = stored.get("provider")
+    model_default = stored.get("model")
+    resolved = assistant_support.resolve_provider(provider_default)
+    
+    restored_provider, restored_assistant, restored_reason = assistant_support.compose_assistant(
+        provider_default,
+        model_default,
+        api_key=ai_settings.api_key_for(ai_dir, resolved),
+        data_dir=ai_dir,
+    )
+
+    assert restored_provider == "gemini"
+    assert restored_assistant is not None
+    assert "gemini adapter ready" in restored_reason.lower()
+
+    # Build router2 (representing the restarted server)
+    router2 = ApiRouter(
+        api_app,
+        planning=PlanningService(tmp_path / "planning-data"),
+        backups=BackupManager(tmp_path / "data", tmp_path / "backups"),
+        assistant=restored_assistant,
+        assistant_provider=restored_provider,
+        assistant_reason=restored_reason,
+        ai_dir=ai_dir,
+    )
+
+    # 5. Verify the saved provider and model are reflected in GET config
+    config_payload = ok(router2, "GET", "/assistant/config")
+    assert config_payload["provider"] == "gemini"
+    assert config_payload["model"] == "gemini-2.5-pro"
+    assert config_payload["available"] is True
+    assert config_payload["stored_keys"]["gemini"] is True
+
+    # 6. Verify Gemini actually receives the API key and is used for an AI request
+    test_payload = ok(router2, "POST", "/assistant/test", {})
+    print("TEST PAYLOAD WAS:", test_payload)
+    assert test_payload["ok"] is True
+    assert test_payload["source"] == "llm"
+    assert test_payload["adapter"] == "gemini:gemini-2.5-pro"
+    assert test_payload["answer"] == "Hi, I am Gemini."
+
+
+def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch):
+    # If Gemini is available but throws an error during complete(), it should NOT fall back to Ollama
+    # (even if Ollama is available in providers_map).
+    
+    monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+    # 1. Mock Gemini transport to fail
+    def failing_gemini(url, payload, headers, timeout):
+        raise urllib.error.HTTPError(url, 500, "Gemini quota exceeded", {}, None)
+        
+    monkeypatch.setattr(
+        "paios.assistant.adapters.gemini.default_transport",
+        failing_gemini
+    )
+    # Mock Ollama transport to succeed so Ollama is available
+    def succeeding_ollama(url, payload, timeout):
+        return {"version": "0.1.0"}
+    monkeypatch.setattr(
+        "paios.assistant.adapters.ollama.default_transport",
+        succeeding_ollama
+    )
+
+    ai_dir = tmp_path / "ai-data"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Store key for Gemini so it is available
+    ai_settings.store_api_key(ai_dir, "gemini", "my-key")
+    
+    # Compose assistant
+    provider, assistant, reason = assistant_support.compose_assistant(
+        "gemini", "gemini-2.5-flash", api_key="my-key", data_dir=ai_dir
+    )
+    assert provider == "gemini"
+    assert assistant is not None
+    assert "gemini adapter ready" in reason
+    
+    # Call completion and check that it does NOT fall back to Ollama, but propagates the error!
+    from paios.assistant.adapters import AdapterError
+    with pytest.raises(AdapterError) as excinfo:
+        assistant.answer_question("test prompt")
+    assert "Gemini request failed" in str(excinfo.value)

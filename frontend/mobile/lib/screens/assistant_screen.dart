@@ -48,7 +48,7 @@ class _AssistantScreenState extends State<AssistantScreen> {
       final payload = await widget.state.client.assistantQuery(text);
       exchange.answer = AssistantAnswer.fromJson(payload);
     } on ApiUnreachableException catch (e) {
-      exchange.errorText = 'Server unreachable: ${e.detail}';
+      exchange.errorText = e.toString();
     } on ApiResponseException catch (e) {
       exchange.errorText = e.status == 401
           ? 'Not paired — pair this device in Settings first.'

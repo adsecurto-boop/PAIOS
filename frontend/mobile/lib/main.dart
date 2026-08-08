@@ -25,6 +25,7 @@ import 'screens/resources_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/study_screen.dart';
 import 'screens/timeline_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'services/app_state.dart';
 import 'services/connection_manager.dart';
 import 'services/settings_service.dart';
@@ -57,21 +58,26 @@ class PaiosApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Listens to the THEME, not to the whole AppState. Watching AppState
-    // here rebuilt MaterialApp — the application root — on every poll
-    // tick and every notification, for a value that changes only when
-    // the user flips the switch.
     return ValueListenableBuilder<bool>(
-      valueListenable: state.darkTheme,
-      builder: (context, dark, child) => MaterialApp(
-        title: 'PAIOS',
-        debugShowCheckedModeBanner: false,
-        theme: lightTheme(),
-        darkTheme: darkThemeData(),
-        themeMode: dark ? ThemeMode.dark : ThemeMode.light,
-        home: child,
-      ),
-      child: HomeShell(state: state, startPolling: startPolling),
+      valueListenable: state.onboardingCompleted,
+      builder: (context, completed, _) {
+        final homeWidget = completed
+            ? HomeShell(state: state, startPolling: startPolling)
+            : OnboardingFlowScreen(state: state);
+
+        return ValueListenableBuilder<bool>(
+          valueListenable: state.darkTheme,
+          builder: (context, dark, child) => MaterialApp(
+            title: 'PAIOS',
+            debugShowCheckedModeBanner: false,
+            theme: lightTheme(),
+            darkTheme: darkThemeData(),
+            themeMode: dark ? ThemeMode.dark : ThemeMode.light,
+            home: child,
+          ),
+          child: homeWidget,
+        );
+      },
     );
   }
 }
@@ -266,6 +272,15 @@ class _HomeShellState extends State<HomeShell> {
                         Navigator.pop(context);
                       },
                     ),
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.help_outline),
+                    title: const Text('Restart Guided Tour'),
+                    onTap: () {
+                      Navigator.pop(context);
+                      state.restartOnboarding();
+                    },
+                  ),
                 ],
               ),
             ),

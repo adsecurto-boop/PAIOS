@@ -19,7 +19,9 @@ import urllib.request
 from paios.assistant.adapters import (
     AdapterError,
     AdapterUnavailableError,
+    AIProvider,
     LlmAdapter,
+    ProviderCapabilities,
 )
 
 DEFAULT_MODEL = "qwen2.5:7b"
@@ -50,7 +52,7 @@ def resolve_base_url(base_url: str | None = None) -> str:
     ).rstrip("/")
 
 
-class OllamaAdapter(LlmAdapter):
+class OllamaProvider(AIProvider):
     def __init__(
         self,
         model: str = DEFAULT_MODEL,
@@ -64,6 +66,8 @@ class OllamaAdapter(LlmAdapter):
         self._transport = (
             transport if transport is not None else default_transport
         )
+        self._last_prompt_tokens = 0
+        self._last_completion_tokens = 0
         try:
             self._transport(
                 f"{self._base_url}/api/version", None, _PROBE_TIMEOUT_SECONDS
@@ -77,6 +81,23 @@ class OllamaAdapter(LlmAdapter):
     @property
     def name(self) -> str:
         return f"ollama:{self._model}"
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        from paios.assistant.adapters import ProviderCapabilities
+        return ProviderCapabilities(
+            offline=True,
+            streaming=True
+        )
+
+    def health_check(self) -> tuple[bool, str]:
+        try:
+            self._transport(
+                f"{self._base_url}/api/version", None, _PROBE_TIMEOUT_SECONDS
+            )
+            return True, "Ready"
+        except Exception as error:
+            return False, f"Ollama is not reachable at {self._base_url}: {error}"
 
     def complete(self, request) -> str:
         payload = {
@@ -107,7 +128,16 @@ class OllamaAdapter(LlmAdapter):
             ) from error
         except Exception as error:
             raise AdapterError(f"Ollama request failed: {error}") from error
+        
+        self._last_prompt_tokens = reply.get("prompt_eval_count", 0)
+        self._last_completion_tokens = reply.get("eval_count", 0)
+
         text = (reply.get("message") or {}).get("content", "")
         if not text:
             raise AdapterError("Ollama returned no text content")
         return text
+
+
+class OllamaAdapter(OllamaProvider):
+    pass
+

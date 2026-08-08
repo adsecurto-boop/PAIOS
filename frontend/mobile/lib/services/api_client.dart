@@ -25,7 +25,7 @@ class ApiUnreachableException implements Exception {
   final String detail;
   ApiUnreachableException(this.detail);
   @override
-  String toString() => 'Server unreachable: $detail';
+  String toString() => 'Unable to connect to backend.';
 }
 
 /// The server was reached but stayed silent past the deadline. Callers
@@ -35,6 +35,9 @@ class ApiTimeoutException extends ApiUnreachableException {
   final Duration waited;
   ApiTimeoutException(this.waited)
       : super('no answer within ${waited.inSeconds}s');
+
+  @override
+  String toString() => 'The desktop did not answer within ${waited.inSeconds}s.';
 }
 
 class ApiResponseException implements Exception {
@@ -48,7 +51,8 @@ class ApiResponseException implements Exception {
 
 class ApiClient {
   /// Poll/action deadline: the desktop is a LAN hop away.
-  static const Duration defaultTimeout = Duration(seconds: 5);
+  static const Duration defaultTimeout = Duration(seconds: 30);
+  static const Duration defaultAiTimeout = Duration(seconds: 30);
 
   /// Deadline for calls the desktop answers by asking a language model.
   /// It matches the backend's own completion ceiling, so the phone never
@@ -57,7 +61,9 @@ class ApiClient {
 
   final String baseUrl;
   final Duration timeout;
+  final Duration aiTimeoutSetting;
   final http.Client _http;
+  late final http.Client Function() httpClientFactory;
 
   /// M21: the bearer token minted by device pairing. When present it is
   /// sent as `Authorization: Bearer <token>` on `/mobile` calls only;
@@ -65,9 +71,14 @@ class ApiClient {
   String? authToken;
 
   ApiClient(String url,
-      {this.timeout = defaultTimeout, http.Client? client, this.authToken})
+      {this.timeout = defaultTimeout,
+      this.aiTimeoutSetting = defaultAiTimeout,
+      http.Client? client,
+      this.authToken})
       : baseUrl = normalizeUrl(url),
-        _http = client ?? http.Client();
+        _http = client ?? http.Client() {
+    httpClientFactory = client != null ? (() => client) : (() => http.Client());
+  }
 
   /// The one place a typed address becomes a usable base URL: trims,
   /// drops a trailing '/', and supplies http:// when the scheme is
@@ -92,8 +103,8 @@ class ApiClient {
   /// the AI path with a short deadline instead of the real five minutes.
   @visibleForTesting
   Future<dynamic> requestForTest(String method, String path,
-          [Map<String, dynamic>? body, Duration? deadline]) =>
-      _request(method, path, body, deadline);
+          [Map<String, dynamic>? body, Duration? deadline, http.Client? customClient]) =>
+      _request(method, path, body, deadline, customClient);
 
   void _log(String message) {
     if (kReleaseMode) return;
@@ -101,8 +112,9 @@ class ApiClient {
   }
 
   Future<dynamic> _request(String method, String path,
-      [Map<String, dynamic>? body, Duration? deadline]) async {
+      [Map<String, dynamic>? body, Duration? deadline, http.Client? customClient]) async {
     final wait = deadline ?? timeout;
+    final clientToUse = customClient ?? _http;
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{
       'Content-Type': 'application/json; charset=utf-8',
@@ -115,21 +127,21 @@ class ApiClient {
         'timeout=${wait.inSeconds}s body=${body == null ? '{}' : jsonEncode(body)}');
     http.Response response;
     try {
+      final Future<http.Response> requestFuture;
       switch (method) {
         case 'GET':
-          response = await _http.get(uri, headers: headers).timeout(wait);
+          requestFuture = clientToUse.get(uri, headers: headers);
         case 'PUT':
-          response = await _http
-              .put(uri, headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(wait);
+          requestFuture = clientToUse.put(uri, headers: headers, body: jsonEncode(body ?? {}));
         case 'DELETE':
-          response = await _http
-              .delete(uri, headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(wait);
+          requestFuture = clientToUse.delete(uri, headers: headers, body: jsonEncode(body ?? {}));
         default:
-          response = await _http
-              .post(uri, headers: headers, body: jsonEncode(body ?? {}))
-              .timeout(wait);
+          requestFuture = clientToUse.post(uri, headers: headers, body: jsonEncode(body ?? {}));
+      }
+      if (wait > Duration.zero) {
+        response = await requestFuture.timeout(wait);
+      } else {
+        response = await requestFuture;
       }
     } on TimeoutException catch (error) {
       _log('<- $method $uri TIMEOUT after ${wait.inSeconds}s [${error.runtimeType}]');
@@ -227,6 +239,7 @@ class ApiClient {
     String? mode,
     String? suggestedTime,
     double? priority,
+    String? projectId,
     String? expectedOutcome,
     Map<String, dynamic>? metadata,
   }) =>
@@ -235,6 +248,7 @@ class ApiClient {
         if (mode != null) 'mode': mode,
         if (suggestedTime != null) 'suggested_time': suggestedTime,
         if (priority != null) 'priority': priority,
+        if (projectId != null) 'project_id': projectId,
         if (expectedOutcome != null) 'expected_outcome': expectedOutcome,
         if (metadata != null && metadata.isNotEmpty) 'metadata': metadata,
       };
@@ -244,6 +258,7 @@ class ApiClient {
     String? mode,
     String? suggestedTime,
     double? priority,
+    String? projectId,
     String? expectedOutcome,
     Map<String, dynamic>? metadata,
   }) async =>
@@ -255,6 +270,7 @@ class ApiClient {
               mode: mode,
               suggestedTime: suggestedTime,
               priority: priority,
+              projectId: projectId,
               expectedOutcome: expectedOutcome,
               metadata: metadata)) as Map<String, dynamic>;
 
@@ -264,6 +280,7 @@ class ApiClient {
     String? mode,
     String? suggestedTime,
     double? priority,
+    String? projectId,
     String? expectedOutcome,
     Map<String, dynamic>? metadata,
   }) async =>
@@ -275,6 +292,7 @@ class ApiClient {
               mode: mode,
               suggestedTime: suggestedTime,
               priority: priority,
+              projectId: projectId,
               expectedOutcome: expectedOutcome,
               metadata: metadata)) as Map<String, dynamic>;
 
@@ -359,13 +377,29 @@ class ApiClient {
   Future<Map<String, dynamic>> assistantStatus() async =>
       await _request('GET', '/assistant/status') as Map<String, dynamic>;
 
-  Future<Map<String, dynamic>> assistantPlan(String text) async =>
-      await _request('POST', '/assistant/plan', {'text': text})
-          as Map<String, dynamic>;
+  Future<Map<String, dynamic>> assistantConfig() async =>
+      await _request('GET', '/assistant/config') as Map<String, dynamic>;
 
-  Future<Map<String, dynamic>> assistantExplainDay() async =>
-      await _request('POST', '/assistant/explain-day', {})
-          as Map<String, dynamic>;
+  Future<Map<String, dynamic>> setAssistantConfig(
+    String provider, {
+    String? model,
+    String? apiKey,
+  }) async =>
+      await _request('POST', '/assistant/config', {
+        'provider': provider,
+        if (model != null) 'model': model,
+        if (apiKey != null) 'api_key': apiKey,
+      }) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> assistantPlan(String text,
+          {Duration? deadline, http.Client? customClient}) async =>
+      await _request('POST', '/assistant/plan', {'text': text},
+          deadline ?? aiTimeoutSetting, customClient) as Map<String, dynamic>;
+
+  Future<Map<String, dynamic>> assistantExplainDay(
+          {Duration? deadline, http.Client? customClient}) async =>
+      await _request('POST', '/assistant/explain-day', {},
+          deadline ?? aiTimeoutSetting, customClient) as Map<String, dynamic>;
 
   // --- M21: mobile companion (paired-device namespace) ---------------------
   //
@@ -426,7 +460,8 @@ class ApiClient {
   /// the AI deadline, not the poll deadline. The phone still talks only
   /// to the desktop: the model lives there and is never contacted from
   /// here.
-  Future<Map<String, dynamic>> assistantQuery(String text) async =>
+  Future<Map<String, dynamic>> assistantQuery(String text,
+          {Duration? deadline, http.Client? customClient}) async =>
       await _request('POST', '/mobile/assistant/query', {'text': text},
-          aiTimeout) as Map<String, dynamic>;
+          deadline ?? aiTimeoutSetting, customClient) as Map<String, dynamic>;
 }

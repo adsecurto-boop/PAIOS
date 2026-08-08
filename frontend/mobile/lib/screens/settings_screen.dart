@@ -63,6 +63,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _serverNotice; // "Saving…" / "Saved — connected to …"
   bool _serverNoticeIsError = false;
 
+  // --- Intelligence card state -----------------------------------------
+  bool _loadingIntelligence = false;
+  bool _savingIntelligence = false;
+  String _aiProvider = 'none';
+  String _aiModel = 'gemini-2.5-flash';
+  final TextEditingController _aiKeyController = TextEditingController();
+
   // --- Test-connection state ------------------------------------------
   bool _testing = false;
   String? _testStage;
@@ -77,6 +84,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _relayController =
         TextEditingController(text: widget.state.settings.relayUrl);
     _pasteController = TextEditingController();
+    _loadIntelligenceConfig();
+  }
+
+  Future<void> _loadIntelligenceConfig() async {
+    if (widget.state.settings.baseUrl.isEmpty) return;
+    setState(() => _loadingIntelligence = true);
+    try {
+      final config = await widget.state.client.assistantConfig();
+      if (mounted) {
+        setState(() {
+          _aiProvider = config['provider'] as String? ?? 'none';
+          final model = config['model'] as String?;
+          if (model != null && model.isNotEmpty) {
+            _aiModel = model;
+          }
+        });
+      }
+    } catch (_) {
+      // Ignored
+    } finally {
+      if (mounted) setState(() => _loadingIntelligence = false);
+    }
   }
 
   @override
@@ -86,6 +115,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _deviceNameController.dispose();
     _relayController.dispose();
     _pasteController.dispose();
+    _aiKeyController.dispose();
     super.dispose();
   }
 
@@ -145,6 +175,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
         : 'Remote access saved. ${result.message}');
   }
 
+  Future<void> _saveIntelligence() async {
+    if (_savingIntelligence) return;
+    setState(() => _savingIntelligence = true);
+    try {
+      await widget.state.client.setAssistantConfig(
+        _aiProvider,
+        model: _aiProvider == 'gemini' ? _aiModel : null,
+        apiKey: _aiKeyController.text.isNotEmpty ? _aiKeyController.text.trim() : null,
+      );
+      _aiKeyController.clear();
+      _notify('AI configuration saved successfully.');
+    } on ApiUnreachableException catch (e) {
+      _notify(e.toString());
+    } on ApiResponseException catch (e) {
+      _notify(e.message);
+    } finally {
+      if (mounted) setState(() => _savingIntelligence = false);
+    }
+  }
+
   /// Reads a pasted/scanned `paios://pair` payload (or a plain address)
   /// and fills the server + relay fields so the user does not type them.
   void _applyPastedPayload() {
@@ -200,7 +250,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _codeController.clear();
       _notify('Paired — the token is stored on this device.');
     } on ApiUnreachableException catch (e) {
-      _notify('Server unreachable: ${e.detail}');
+      _notify(e.toString());
     } on ApiResponseException catch (e) {
       _notify(e.message);
     } finally {
@@ -389,6 +439,86 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         : const Text('Save server'),
                   ),
                 ),
+              ],
+            ),
+          ),
+        ),
+        Card(
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Intelligence'),
+                const SizedBox(height: 8),
+                if (_loadingIntelligence)
+                  const Center(child: CircularProgressIndicator())
+                else ...[
+                  DropdownButtonFormField<String>(
+                    value: ['auto', 'ollama', 'gemini', 'none'].contains(_aiProvider) ? _aiProvider : 'none',
+                    decoration: const InputDecoration(
+                      labelText: 'AI Provider',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'auto', child: Text('Automatic')),
+                      DropdownMenuItem(value: 'ollama', child: Text('Local AI (Ollama)')),
+                      DropdownMenuItem(value: 'gemini', child: Text('Google Gemini')),
+                      DropdownMenuItem(value: 'none', child: Text('Offline (no AI)')),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _aiProvider = value);
+                      }
+                    },
+                  ),
+                  if (_aiProvider == 'gemini') ...[
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      value: ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp', 'gemini-2.5-flash', 'gemini-2.5-pro'].contains(_aiModel) ? _aiModel : 'gemini-2.5-flash',
+                      decoration: const InputDecoration(
+                        labelText: 'Model',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(value: 'gemini-1.5-flash', child: Text('gemini-1.5-flash')),
+                        DropdownMenuItem(value: 'gemini-1.5-pro', child: Text('gemini-1.5-pro')),
+                        DropdownMenuItem(value: 'gemini-2.0-flash-exp', child: Text('gemini-2.0-flash-exp')),
+                        DropdownMenuItem(value: 'gemini-2.5-flash', child: Text('gemini-2.5-flash')),
+                        DropdownMenuItem(value: 'gemini-2.5-pro', child: Text('gemini-2.5-pro')),
+                      ],
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() => _aiModel = value);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _aiKeyController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'API Key (leave blank to keep existing)',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: FilledButton(
+                      onPressed: _savingIntelligence ? null : _saveIntelligence,
+                      child: _savingIntelligence
+                          ? const SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : const Text('Save Intelligence'),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),

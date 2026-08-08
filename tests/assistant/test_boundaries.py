@@ -18,11 +18,9 @@ SDK_ALLOWANCES = {
     "anthropic.py": {"anthropic"},
     "openai.py": {"openai"},
 }
-#: The Ollama adapter's "SDK" is plain local HTTP — urllib is its
-#: declared transport, permitted in that one file exactly like the
-#: cloud SDKs are in theirs.
 TRANSPORT_ALLOWANCES = {
     "ollama.py": {"urllib", "urllib.request", "urllib.error"},
+    "gemini.py": {"urllib", "urllib.request", "urllib.error"},
 }
 FORBIDDEN_STDLIB = {
     "pathlib", "sqlite3", "shelve", "pickle", "dbm", "json.tool",

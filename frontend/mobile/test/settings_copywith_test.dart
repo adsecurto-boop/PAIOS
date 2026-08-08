@@ -36,4 +36,14 @@ void main() {
   test('a plain copyWith never accidentally unpairs', () {
     expect(base().copyWith(refreshSeconds: 30).deviceToken, 'tok');
   });
+
+  test('changing timeouts updates and preserves values', () {
+    final updated = base().copyWith(requestTimeoutSeconds: 45, aiTimeoutSeconds: 60);
+    expect(updated.requestTimeoutSeconds, 45);
+    expect(updated.aiTimeoutSeconds, 60);
+    
+    final another = base().copyWith(refreshSeconds: 15);
+    expect(another.requestTimeoutSeconds, Settings.defaultRequestTimeoutSeconds);
+    expect(another.aiTimeoutSeconds, Settings.defaultAiTimeoutSeconds);
+  });
 }

@@ -9,12 +9,14 @@ class EventFormResult {
   final String title;
   final String? suggestedTime;
   final double? priority;
+  final String? projectId;
   final Map<String, dynamic> metadata; // only user-set fields
 
   EventFormResult({
     required this.title,
     this.suggestedTime,
     this.priority,
+    this.projectId,
     this.metadata = const {},
   });
 }
@@ -27,7 +29,9 @@ Future<EventFormResult?> showEventForm(
   String? initialTitle,
   String? initialSuggestedTime,
   double? initialPriority,
+  String? initialProjectId,
   EventMetadata? initialMetadata,
+  List<Map<String, dynamic>> projects = const [],
 }) =>
     showDialog<EventFormResult>(
       context: context,
@@ -37,7 +41,9 @@ Future<EventFormResult?> showEventForm(
         initialTitle: initialTitle,
         initialSuggestedTime: initialSuggestedTime,
         initialPriority: initialPriority,
+        initialProjectId: initialProjectId,
         initialMetadata: initialMetadata,
+        projects: projects,
       ),
     );
 
@@ -47,7 +53,9 @@ class _EventFormDialog extends StatefulWidget {
   final String? initialTitle;
   final String? initialSuggestedTime;
   final double? initialPriority;
+  final String? initialProjectId;
   final EventMetadata? initialMetadata;
+  final List<Map<String, dynamic>> projects;
 
   const _EventFormDialog({
     required this.heading,
@@ -55,7 +63,9 @@ class _EventFormDialog extends StatefulWidget {
     this.initialTitle,
     this.initialSuggestedTime,
     this.initialPriority,
+    this.initialProjectId,
     this.initialMetadata,
+    this.projects = const [],
   });
 
   @override
@@ -71,6 +81,7 @@ class _EventFormDialogState extends State<_EventFormDialog> {
   TimeOfDay? _time;
   DateTime? _deadline;
   String _energy = '';
+  String? _selectedProjectId;
 
   @override
   void initState() {
@@ -83,6 +94,7 @@ class _EventFormDialogState extends State<_EventFormDialog> {
         text: meta?.estimatedDurationMinutes?.toString() ?? '');
     _tags = TextEditingController(text: meta?.tags.join(', ') ?? '');
     _energy = meta?.energy ?? '';
+    _selectedProjectId = widget.initialProjectId;
     final start = _parseIso(widget.initialSuggestedTime);
     if (start != null) {
       _date = DateTime(start.year, start.month, start.day);
@@ -168,6 +180,7 @@ class _EventFormDialogState extends State<_EventFormDialog> {
         title: title,
         suggestedTime: _suggestedTime,
         priority: double.tryParse(_priority.text.trim()),
+        projectId: _selectedProjectId,
         metadata: _metadata,
       ),
     );
@@ -238,6 +251,18 @@ class _EventFormDialogState extends State<_EventFormDialog> {
               controller: _tags,
               decoration: const InputDecoration(
                   labelText: 'Tags (comma-separated)'),
+            ),
+            DropdownButtonFormField<String>(
+              value: _selectedProjectId,
+              decoration: const InputDecoration(labelText: 'Project'),
+              items: [
+                const DropdownMenuItem(value: null, child: Text('— No Project —')),
+                ...widget.projects.map((project) => DropdownMenuItem(
+                  value: project['project_id'] as String?,
+                  child: Text(project['name'] as String),
+                )),
+              ],
+              onChanged: (value) => setState(() => _selectedProjectId = value),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(

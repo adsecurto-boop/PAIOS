@@ -284,7 +284,8 @@ class EventsPage(QWidget):
 
     def on_new(self) -> None:
         """Public: also the window's Ctrl+N target."""
-        dialog = EventDialog("New event", self)
+        projects = self._window.client.get_projects()
+        dialog = EventDialog("New event", self, projects)
         if dialog.exec():
             values = dialog.values()
             self._window.run_action(
@@ -299,7 +300,8 @@ class EventsPage(QWidget):
             )
         except Exception:
             metadata = {}
-        dialog = EventDialog(f"Edit — {event['description']}", self)
+        projects = self._window.client.get_projects()
+        dialog = EventDialog(f"Edit — {event['description']}", self, projects)
         dialog.prefill(event, metadata)
         if dialog.exec():
             values = dialog.values()

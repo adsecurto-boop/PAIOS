@@ -228,6 +228,34 @@ class ApiServer:
         application: Application | None = None,
     ) -> None:
         self._config = config if config is not None else ApiConfig()
+        # PART 1: First-Install Initialization
+        # When launched for the first time, detect first launch and delete operational data.
+        data_path = Path(self._config.data_dir)
+        sentinel_path = data_path / "first_install_complete"
+        if not sentinel_path.exists():
+            data_path.mkdir(parents=True, exist_ok=True)
+            operational_files = [
+                "events.json", "goals.json", "projects.json", "recommendations.json",
+                "event_disturbers.json", "reflections.json", "insights.json", "habits.json",
+                "progress.json", "context_windows.json", "knowledge.json", "ai_request_logs.json"
+            ]
+            for filename in operational_files:
+                file_path = data_path / filename
+                if file_path.exists():
+                    try:
+                        file_path.unlink()
+                    except OSError:
+                        pass
+                # Seeding with empty array []
+                try:
+                    file_path.write_text("[]", encoding="utf-8")
+                except OSError:
+                    pass
+            try:
+                sentinel_path.write_text(json.dumps({"first_install_complete": True, "timestamp": time.time()}), encoding="utf-8")
+            except OSError:
+                pass
+        
         # M20 composition: planning stores exist before the Application
         # so the MetadataPlanner can ride the Scheduler's R3 seam.
         self._planning = PlanningService(self._config.data_dir)
@@ -263,6 +291,7 @@ class ApiServer:
             provider_default,
             model_default,
             api_key=ai_settings.api_key_for(self._config.data_dir, resolved),
+            data_dir=self._config.data_dir,
         )
         self._mobile = PairingService(self._config.data_dir)
         self._http: ThreadingHTTPServer | None = None

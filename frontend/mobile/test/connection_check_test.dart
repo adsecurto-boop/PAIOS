@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:paios_mobile/services/api_client.dart';
 import 'package:paios_mobile/services/connection_check.dart';
 
@@ -74,7 +75,7 @@ void main() {
   tearDown(() => desktop.stop());
 
   ApiClient client() =>
-      ApiClient(desktop.url, authToken: 'tok', timeout: const Duration(seconds: 5));
+      ApiClient(desktop.url, authToken: 'tok', timeout: const Duration(seconds: 30));
 
   test('all three links green reports connected', () async {
     final c = client();
@@ -179,7 +180,8 @@ class _ShortAiClient extends ApiClient {
   _ShortAiClient(super.url, {super.authToken, super.timeout});
 
   @override
-  Future<Map<String, dynamic>> assistantQuery(String text) async {
+  Future<Map<String, dynamic>> assistantQuery(String text,
+      {Duration? deadline, http.Client? customClient}) async {
     // Route through the same transport but with a 500 ms AI deadline.
     // ignore: invalid_use_of_visible_for_testing_member
     return await requestForTest(

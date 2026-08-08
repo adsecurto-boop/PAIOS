@@ -23,6 +23,7 @@ _DPAPI_PREFIX = "dpapi:"
 KEY_VARIABLES = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
 }
 
 

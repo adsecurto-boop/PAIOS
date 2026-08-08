@@ -263,6 +263,7 @@ class EventItem {
   final String? endTime;
   final int? durationMinutes;
   final String? outcome;
+  final String? projectId;
   final List<Map<String, dynamic>> transitions;
 
   EventItem.fromJson(Map<String, dynamic> json)
@@ -275,6 +276,7 @@ class EventItem {
         durationMinutes =
             json['duration_minutes'] is num ? _i(json['duration_minutes']) : null,
         outcome = _sOrNull(json['outcome']),
+        projectId = _sOrNull(json['project_id']),
         transitions = _listOfMaps(json['transitions']);
 }
 

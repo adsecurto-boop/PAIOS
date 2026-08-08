@@ -74,6 +74,26 @@ class AssistantOrchestrator:
     def __init__(self, adapter: LlmAdapter) -> None:
         self._adapter = adapter
 
+    def get_capabilities(self) -> dict:
+        if hasattr(self._adapter, "get_capabilities"):
+            return self._adapter.get_capabilities()
+        return {
+            "streaming": False,
+            "vision": False,
+            "tool_calling": False,
+            "thinking": False,
+            "offline": False,
+            "embeddings": False,
+            "planning": True,
+            "image_generation": False,
+            "audio": False,
+        }
+
+    def list_providers(self) -> dict:
+        if hasattr(self._adapter, "list_providers"):
+            return self._adapter.list_providers()
+        return {}
+
     # --- the pipeline -----------------------------------------------------
 
     def _run(

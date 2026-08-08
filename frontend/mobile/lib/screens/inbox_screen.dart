@@ -61,7 +61,7 @@ class _InboxScreenState extends State<InboxScreen> {
           error = null;
         });
       } else {
-        setState(() => error = 'Server unreachable: ${e.detail}');
+        setState(() => error = e.toString());
       }
     } on ApiResponseException catch (e) {
       if (!mounted) return;
@@ -125,7 +125,7 @@ class _InboxScreenState extends State<InboxScreen> {
       _capture.text = text; // give the words back
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Server unreachable: ${e.detail}')));
+            SnackBar(content: Text(e.toString())));
       }
     } on ApiResponseException catch (e) {
       _capture.text = text;

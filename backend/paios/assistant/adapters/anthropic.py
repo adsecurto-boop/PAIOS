@@ -10,14 +10,16 @@ import os
 from paios.assistant.adapters import (
     AdapterError,
     AdapterUnavailableError,
+    AIProvider,
     LlmAdapter,
+    ProviderCapabilities,
 )
 
 DEFAULT_MODEL = "claude-opus-4-8"
 API_KEY_VARIABLE = "ANTHROPIC_API_KEY"
 
 
-class AnthropicAdapter(LlmAdapter):
+class AnthropicAdapter(AIProvider):
     def __init__(
         self,
         api_key: str | None = None,
@@ -45,6 +47,24 @@ class AnthropicAdapter(LlmAdapter):
             # construction, which callers cannot map to the fallback.
             raise AdapterUnavailableError(f"{API_KEY_VARIABLE} is not set")
         self._client = anthropic.Anthropic(api_key=key)
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        from paios.assistant.adapters import ProviderCapabilities
+        return ProviderCapabilities(
+            streaming=True,
+            vision=True,
+            tool_calling=True,
+            thinking=True
+        )
+
+    def health_check(self) -> tuple[bool, str]:
+        # Simple client verify/key check
+        if not getattr(self, "_client", None):
+            return False, "Anthropic client not initialized"
+        if not self._client.api_key:
+            return False, f"{API_KEY_VARIABLE} is not set"
+        return True, "Ready"
 
     @property
     def name(self) -> str:

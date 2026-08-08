@@ -32,13 +32,21 @@ class EventsScreen extends RestListScreen {
 
   Future<void> _create(
       BuildContext context, RestListScreenState screenState) async {
-    final result = await showEventForm(context);
+    final client = screenState.widget.state.client;
+    List<Map<String, dynamic>> projects = [];
+    try {
+      projects = await client.getProjects();
+    } catch (_) {
+      // If projects fail to load, continue with empty list
+    }
+    final result = await showEventForm(context, projects: projects);
     if (result == null) return;
     await screenState.runAction(
-      () => screenState.widget.state.client.createEvent(
+      () => client.createEvent(
         title: result.title,
         suggestedTime: result.suggestedTime,
         priority: result.priority,
+        projectId: result.projectId,
         metadata: result.metadata.isEmpty ? null : result.metadata,
       ),
       'Event created',
@@ -54,6 +62,12 @@ class EventsScreen extends RestListScreen {
     try {
       metadata = EventMetadata.fromJson(await client.getEventMetadata(event.id));
     } catch (_) {}
+    List<Map<String, dynamic>> projects = [];
+    try {
+      projects = await client.getProjects();
+    } catch (_) {
+      // If projects fail to load, continue with empty list
+    }
     if (!context.mounted) return;
     final result = await showEventForm(
       context,
@@ -62,6 +76,7 @@ class EventsScreen extends RestListScreen {
       initialTitle: event.description,
       initialSuggestedTime: event.startTime,
       initialMetadata: metadata,
+      projects: projects,
     );
     if (result == null) return;
     await screenState.runAction(
@@ -70,6 +85,7 @@ class EventsScreen extends RestListScreen {
         title: result.title,
         suggestedTime: result.suggestedTime,
         priority: result.priority,
+        projectId: result.projectId,
         metadata: result.metadata.isEmpty ? null : result.metadata,
       ),
       'Event updated (rescheduled as a new event)',

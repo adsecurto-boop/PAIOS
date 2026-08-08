@@ -14,6 +14,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'fixtures.dart';
 
+// Export for use in other test files
+export 'fixtures.dart';
+
 class RequestLog {
   final List<String> requests = [];
   final List<String> bodies = []; // POST/PUT payloads, in request order
@@ -58,6 +61,19 @@ ApiClient Function(String) mockFactory(RequestLog log,
         if (path == '/events' && request.method == 'GET') {
           return http.Response(
               jsonEncode({'events': events ?? eventsJson()}), 200);
+        }
+        if (path == '/projects' && request.method == 'GET') {
+          return http.Response(
+              jsonEncode({'projects': [
+                {
+                  'project_id': 'p1',
+                  'user_id': 'u1',
+                  'name': 'PAIOS',
+                  'status': 'Active',
+                  'created_at': '2026-07-01T08:00:00',
+                  'progress': {'completion_percentage': 40.0, 'velocity': 1.0},
+                }
+              ]}), 200);
         }
         if (path == '/recommendations') {
           return http.Response(
