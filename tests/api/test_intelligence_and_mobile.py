@@ -625,6 +625,46 @@ def test_gemini_save_restart_restore_flow(api_app, tmp_path, monkeypatch):
     assert test_payload["answer"] == "Hi, I am Gemini."
 
 
+def test_cloud_provider_environment_variable_fallback(api_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "env-secret-key")
+    # 1. Mock Gemini transport to succeed
+    def fake_gemini_transport(url, payload, headers, timeout):
+        if "generateContent" in url:
+            return {
+                "candidates": [{"content": {"parts": [{"text": '{"answer": "Hi from env.", "bullets": [], "confidence": 1.0}'}]}}]
+            }
+        return {}
+
+    monkeypatch.setattr(
+        "paios.assistant.adapters.gemini.default_transport",
+        fake_gemini_transport
+    )
+    monkeypatch.delenv("PAIOS_AI_PROVIDER", raising=False)
+
+    ai_dir = tmp_path / "ai-data"
+    ai_dir.mkdir(parents=True, exist_ok=True)
+
+    # Store provider selection but NO key is stored (simulating missing DPAPI)
+    ai_settings.save(ai_dir, {"provider": "gemini", "model": "gemini-2.5-pro"})
+
+    # Compose assistant for the startup instance
+    stored = ai_settings.load(ai_dir)
+    provider_default = stored.get("provider")
+    model_default = stored.get("model")
+    resolved = assistant_support.resolve_provider(provider_default)
+
+    restored_provider, restored_assistant, restored_reason = assistant_support.compose_assistant(
+        provider_default,
+        model_default,
+        api_key=ai_settings.api_key_for(ai_dir, resolved), # This will be None
+        data_dir=ai_dir,
+    )
+
+    assert restored_provider == "gemini"
+    assert restored_assistant is not None
+    assert "gemini adapter ready" in restored_reason.lower()
+
+
 def test_gemini_no_ollama_fallback_when_available(api_app, tmp_path, monkeypatch):
     # If Gemini is available but throws an error during complete(), it should NOT fall back to Ollama
     # (even if Ollama is available in providers_map).
