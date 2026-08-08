@@ -393,3 +393,71 @@ class TestForbiddenImports:
                         assert name.startswith(ALLOWED_PAIOS_PREFIXES), (
                             f"{module_path.name} imports {name!r}"
                         )
+
+
+class TestRunsConcurrently:
+    @pytest.mark.parametrize(
+        "path,expected",
+        [
+            # Basic exact matching
+            ("assistant/test", True),
+            ("/assistant/test", True),
+            ("assistant/test/", True),
+            ("/assistant/test/", True),
+            ("assistant/setup", True),
+            ("/assistant/setup", True),
+            ("assistant/providers", True),
+            ("/assistant/providers", True),
+            ("assistant/ollama", True),
+            ("/assistant/ollama", True),
+            ("assistant/ollama/pull", True),
+            ("/assistant/ollama/pull", True),
+            ("assistant/ollama/remove", True),
+            ("/assistant/ollama/remove", True),
+            ("assistant/ollama/show", True),
+            ("/assistant/ollama/show", True),
+
+            # Query parameters extraction
+            ("assistant/test?foo=bar", True),
+            ("/assistant/test?key=value&other=123", True),
+            ("/assistant/ollama/pull?model=qwen", True),
+
+            # Consecutive multi-slash tolerance
+            ("///assistant/test", True),
+            ("/assistant///test", True),
+            ("assistant/test///", True),
+            ("//assistant//test//", True),
+
+            # Empty paths and root paths
+            ("", False),
+            ("/", False),
+            ("///", False),
+
+            # Trailing slash variants
+            ("assistant/setup/", True),
+
+            # Sub-paths and parent-paths of concurrent endpoints
+            ("assistant", False),
+            ("/assistant", False),
+            ("assistant/test/extra", False),
+            ("/assistant/test/extra", False),
+            ("assistant/ollama/pull/extra", False),
+
+            # Case-sensitivity checks
+            ("Assistant/test", False),
+            ("assistant/Test", False),
+            ("ASSISTANT/TEST", False),
+            ("assistant/OLLAMA/pull", False),
+
+            # Completely different paths
+            ("status", False),
+            ("/status", False),
+            ("dashboard", False),
+            ("/dashboard", False),
+            ("events", False),
+            ("/events/123/start", False),
+        ],
+    )
+    def test_runs_concurrently_edge_cases(self, path, expected):
+        from paios.api.routes import runs_concurrently
+        assert runs_concurrently(path) is expected
