@@ -155,9 +155,11 @@ class TestAnthropicAdapter:
     def test_sdk_exception_becomes_adapter_error(self):
         from paios.assistant.adapters.anthropic import AnthropicAdapter
 
-        client = FakeAnthropicClient(RuntimeError("boom"))
-        with pytest.raises(AdapterError, match="boom"):
+        cause = RuntimeError("boom")
+        client = FakeAnthropicClient(cause)
+        with pytest.raises(AdapterError, match="boom") as exc_info:
             AnthropicAdapter(client=client).complete(request())
+        assert exc_info.value.__cause__ is cause
 
     def test_unavailable_without_sdk(self):
         pytest.importorskip_reason = None
