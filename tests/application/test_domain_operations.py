@@ -116,6 +116,11 @@ class TestGoalOperations:
         with pytest.raises(EntityNotFound):
             started_app.get_goal(GoalId("missing"))
 
+    def test_get_goal_raises_entity_not_found_when_missing(self, started_app):
+        operations = started_app.components.operations
+        with pytest.raises(EntityNotFound):
+            operations.get_goal(GoalId("missing"))
+
 
 class TestProjectOperations:
     def test_list_projects(self, started_app):
