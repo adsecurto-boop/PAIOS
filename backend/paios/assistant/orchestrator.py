@@ -416,9 +416,23 @@ class AssistantOrchestrator:
             user_prompt=user_prompt,
         )
         from paios.assistant.provider_manager import ProviderManager
+        from paios.assistant.adapters import AdapterError
         if isinstance(self._adapter, ProviderManager):
+            if self._adapter._active_provider_name == "gemini":
+                gemini_prov = self._adapter._providers.get("gemini")
+                if not gemini_prov or not getattr(gemini_prov, "_api_key", None):
+                    raise AdapterError(
+                        "Gemini API key is not set. Please set the GEMINI_API_KEY environment variable. "
+                        "Gemini could not be initialized."
+                    )
             raw = self._adapter.complete_without_fallback(request)
         else:
+            if getattr(self._adapter, "name", "").startswith("gemini"):
+                if not getattr(self._adapter, "_api_key", None):
+                    raise AdapterError(
+                        "Gemini API key is not set. Please set the GEMINI_API_KEY environment variable. "
+                        "Gemini could not be initialized."
+                    )
             raw = self._adapter.complete(request)
         parsed = parse_response(raw)
         return AssistantResult(

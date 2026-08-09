@@ -174,6 +174,17 @@ def _construct(
             return ai_settings.api_key_for(data_dir, prov_name)
         return None
 
+    if not ai_settings.is_windows() and provider == "gemini":
+        gem_key = get_key("gemini")
+        if not gem_key and not os.environ.get("GEMINI_API_KEY"):
+            import logging
+            logging.getLogger("paios.api").warning(
+                "Secure key storage is unavailable on this platform. "
+                "The API key cannot be saved to ai-settings.json. "
+                "Please set the GEMINI_API_KEY environment variable in your terminal session "
+                "before running `paios serve`."
+            )
+
     # 2. Ollama
     try:
         from paios.assistant.adapters.ollama import OllamaProvider
