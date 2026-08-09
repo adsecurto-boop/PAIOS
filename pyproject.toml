@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "paios"
-version = "2.4.0"
+dynamic = ["version"]
 description = "PAIOS - Personal AI Operating System"
 requires-python = ">=3.12"
 # The backend is deliberately dependency-free (stdlib only).
@@ -51,3 +51,6 @@ project-includes = [
 search-path = [
     "backend", "frontend/desktop", "launcher", "installer", "updater", "relay"
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "paios.__version__"}

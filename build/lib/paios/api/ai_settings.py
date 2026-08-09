@@ -23,6 +23,7 @@ _DPAPI_PREFIX = "dpapi:"
 KEY_VARIABLES = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
 }
 
 
@@ -88,10 +89,14 @@ def _crypt(data: bytes, protect: bool) -> bytes | None:
         ctypes.windll.kernel32.LocalFree(blob_out.pbData)
 
 
+def is_windows() -> bool:
+    return os.name == "nt"
+
+
 def protect_key(plain: str) -> str | None:
     """Plain key -> storable string, or None when the platform cannot
     protect it (callers must then NOT store it)."""
-    if os.name != "nt":
+    if not is_windows():
         return None
     try:
         encrypted = _crypt(plain.encode("utf-8"), protect=True)
@@ -103,7 +108,7 @@ def protect_key(plain: str) -> str | None:
 
 
 def unprotect_key(stored: str) -> str | None:
-    if not stored.startswith(_DPAPI_PREFIX) or os.name != "nt":
+    if not stored.startswith(_DPAPI_PREFIX) or not is_windows():
         return None
     try:
         decrypted = _crypt(

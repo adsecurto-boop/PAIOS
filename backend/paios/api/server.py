@@ -278,6 +278,18 @@ class ApiServer:
         self._backups = BackupManager(self._config.data_dir, backup_dir)
         # Intelligence layer: env > persisted ai-settings.json > ApiConfig.
         stored = ai_settings.load(self._config.data_dir)
+        saved_provider = stored.get("provider")
+        saved_model = stored.get("model")
+        if saved_provider:
+            resolved_saved_provider = assistant_support.resolve_provider(saved_provider, is_explicit=True)
+            consistent_model = assistant_support.resolve_model(resolved_saved_provider, saved_model)
+            if consistent_model != saved_model:
+                ai_settings.save(self._config.data_dir, {
+                    "provider": saved_provider,
+                    "model": consistent_model
+                })
+                stored = ai_settings.load(self._config.data_dir)
+
         provider_default = (
             stored.get("provider") or self._config.ai_provider
         )

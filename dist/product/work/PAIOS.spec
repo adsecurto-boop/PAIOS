@@ -9,8 +9,8 @@ hiddenimports += collect_submodules('segno')
 
 
 a = Analysis(
-    ['C:/Projects/PAIOS/launcher/paios_launcher/__main__.py'],
-    pathex=['C:/Projects/PAIOS/backend', 'C:/Projects/PAIOS/frontend/desktop', 'C:/Projects/PAIOS/launcher', 'C:/Projects/PAIOS/updater'],
+    ['C:\\Projects\\PAIOS\\launcher\\paios_launcher\\__main__.py'],
+    pathex=['C:\\Projects\\PAIOS\\backend', 'C:\\Projects\\PAIOS\\frontend\\desktop', 'C:\\Projects\\PAIOS\\launcher', 'C:\\Projects\\PAIOS\\updater'],
     binaries=[],
     datas=[],
     hiddenimports=hiddenimports,
@@ -39,8 +39,8 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='C:/Projects/PAIOS/dist/product/work/version_resource.txt',
-    icon=['C:/Projects/PAIOS/assets/paios.ico'],
+    version='C:\\Projects\\PAIOS\\dist\\product\\work\\version_resource.txt',
+    icon=['C:\\Projects\\PAIOS\\assets\\paios.ico'],
 )
 coll = COLLECT(
     exe,

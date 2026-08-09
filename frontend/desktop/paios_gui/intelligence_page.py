@@ -253,8 +253,8 @@ class IntelligencePage(QWidget):
         elif provider == "ollama":
             self.install_button.show()
             self.use_local_button.show()
-            if hasattr(self, "_last_installed_models"):
-                self._populate_models(self._last_installed_models)
+            installed = getattr(self, "_last_installed_models", [])
+            self._populate_models(installed)
 
     def _selected_provider(self) -> str:
         return _MODES[self.mode_combo.currentIndex()][1]
@@ -421,6 +421,9 @@ class IntelligencePage(QWidget):
         return value if isinstance(value, int) else None
 
     def _populate_models(self, installed: list) -> None:
+        provider = self._selected_provider()
+        if provider in _CLOUD_MODELS:
+            return
         wanted = self.model_combo.currentData() or self._stored_model
         self.model_combo.blockSignals(True)
         self.model_combo.clear()

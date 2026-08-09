@@ -767,3 +767,12 @@ class CommandProcessor:
         raise CommandArgumentError(
             f"Unknown {label} {token!r}; expected one of: {valid}"
         )
+
+    def _cmd_version(self, args) -> str:
+        import paios
+        info = paios.get_version_info()
+        return (
+            f"PAIOS version: {info['version']}\n"
+            f"Build: {info['build']}\n"
+            f"Git Commit: {info['commit']}"
+        )

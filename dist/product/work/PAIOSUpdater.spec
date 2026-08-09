@@ -2,8 +2,8 @@
 
 
 a = Analysis(
-    ['C:/Projects/PAIOS/updater/paios_updater/__main__.py'],
-    pathex=['C:/Projects/PAIOS/updater'],
+    ['C:\\Projects\\PAIOS\\updater\\paios_updater\\__main__.py'],
+    pathex=['C:\\Projects\\PAIOS\\updater'],
     binaries=[],
     datas=[],
     hiddenimports=[],
@@ -35,6 +35,6 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    version='C:/Projects/PAIOS/dist/product/work/version_resource.txt',
-    icon=['C:/Projects/PAIOS/assets/paios.ico'],
+    version='C:\\Projects\\PAIOS\\dist\\product\\work\\version_resource.txt',
+    icon=['C:\\Projects\\PAIOS\\assets\\paios.ico'],
 )

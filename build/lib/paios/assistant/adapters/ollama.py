@@ -102,6 +102,36 @@ class OllamaProvider(AIProvider):
             return False, f"Ollama is not reachable at {self._base_url}: {error}"
 
     def complete(self, request) -> str:
+        import logging
+        import inspect
+        logger = logging.getLogger("paios.api")
+        
+        # Check and log if gemini-2.5-flash or other cloud models reach Ollama
+        if self._model and any(self._model.startswith(prefix) for prefix in ("gemini", "gpt", "claude")):
+            logger.warning(
+                f"[DEBUG] OllamaProvider complete: ERROR - cloud model {self._model} reached Ollama!"
+            )
+            
+        # Stack frame inspection to check active provider in ProviderManager
+        active_provider = "unknown"
+        stack = inspect.stack()
+        for frame_info in stack:
+            frame = frame_info.frame
+            self_obj = frame.f_locals.get("self")
+            if self_obj and type(self_obj).__name__ == "ProviderManager":
+                active_provider = getattr(self_obj, "_active_provider_name", "unknown")
+                break
+                
+        reason = f"active provider configured in ProviderManager is {active_provider}"
+        logger.warning(
+            f"[DIAGNOSTIC] OllamaProvider complete: model={self._model}, reason={reason}"
+        )
+        if active_provider == "gemini":
+            logger.warning(
+                "[DIAGNOSTIC] OllamaProvider complete: [HIGH PRIORITY provider-routing defect] "
+                "Gemini is supposedly active provider but Ollama is being called!"
+            )
+            
         payload = {
             "model": self._model,
             "stream": False,

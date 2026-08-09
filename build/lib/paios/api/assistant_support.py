@@ -33,8 +33,49 @@ CONFIG_HINT = (
 )
 
 
-def resolve_provider(config_provider: str) -> str:
-    provider = os.environ.get("PAIOS_AI_PROVIDER", config_provider or "none")
+# Default models for consistency resolution
+GEMINI_DEFAULT = "gemini-2.5-flash"
+OPENAI_DEFAULT = "gpt-4o"
+ANTHROPIC_DEFAULT = "claude-opus-4-8"
+OLLAMA_DEFAULT = "qwen2.5:7b"
+
+
+def resolve_model(provider: str, model: str | None) -> str | None:
+    if provider in ("none", "null"):
+        return None
+    model_str = model.strip() if model else ""
+    if provider == "gemini":
+        if not model_str.startswith("gemini-"):
+            return GEMINI_DEFAULT
+        return model_str
+    elif provider == "openai":
+        if not model_str.startswith("gpt-"):
+            return OPENAI_DEFAULT
+        return model_str
+    elif provider == "anthropic":
+        if not model_str.startswith("claude-"):
+            return ANTHROPIC_DEFAULT
+        return model_str
+    elif provider == "ollama":
+        if any(model_str.startswith(p) for p in ("gemini-", "gpt-", "claude-")):
+            return OLLAMA_DEFAULT
+        return model_str or OLLAMA_DEFAULT
+    return model_str or None
+
+
+import sys
+
+
+def resolve_provider(config_provider: str, is_explicit: bool = False) -> str:
+    if is_explicit:
+        provider = config_provider or "none"
+    else:
+        is_frozen = getattr(sys, "frozen", False)
+        allow_override = os.environ.get("PAIOS_ALLOW_ENV_OVERRIDE") in ("true", "1")
+        if not is_frozen or allow_override:
+            provider = os.environ.get("PAIOS_AI_PROVIDER", config_provider or "none")
+        else:
+            provider = config_provider or "none"
     provider = provider.strip().lower()
     return provider if provider in PROVIDERS else "none"
 
@@ -130,8 +171,7 @@ def _construct(
         if prov_name == provider and api_key:
             return api_key
         if data_dir:
-            resolved = resolve_provider(prov_name)
-            return ai_settings.api_key_for(data_dir, resolved)
+            return ai_settings.api_key_for(data_dir, prov_name)
         return None
 
     # 2. Ollama
@@ -140,9 +180,13 @@ def _construct(
         # Only pass model if ollama is the active provider
         ollama_model = model if provider == "ollama" else None
         kwargs = {"model": ollama_model} if ollama_model else {}
+        import logging
+        logger = logging.getLogger("paios.api")
+        logger.warning(f"[DIAGNOSTIC] Instantiating OllamaProvider with model={ollama_model or 'default'}")
         providers_map["ollama"] = OllamaProvider(**kwargs)
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("paios.api").warning(f"[DIAGNOSTIC] OllamaProvider init failed: {e}")
 
     # 3. Gemini
     try:
@@ -152,6 +196,12 @@ def _construct(
         kwargs = {"model": gem_model} if gem_model else {}
         if gem_key is not None:
             kwargs["api_key"] = gem_key
+        import logging
+        logger = logging.getLogger("paios.api")
+        logger.warning(
+            f"[DIAGNOSTIC] Instantiating GeminiProvider with model={gem_model or 'default'}, "
+            f"api_key_present={bool(gem_key)}"
+        )
         providers_map["gemini"] = GeminiProvider(**kwargs)
     except Exception as e:
         import logging
@@ -165,9 +215,12 @@ def _construct(
         kwargs = {"model": ant_model} if ant_model else {}
         if ant_key is not None:
             kwargs["api_key"] = ant_key
+        import logging
+        logging.getLogger("paios.api").warning(f"[DIAGNOSTIC] Instantiating AnthropicAdapter with model={ant_model or 'default'}, api_key_present={bool(ant_key)}")
         providers_map["anthropic"] = AnthropicAdapter(**kwargs)
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("paios.api").warning(f"[DIAGNOSTIC] Anthropic init failed: {e}")
 
     # 5. OpenAI
     try:
@@ -177,9 +230,12 @@ def _construct(
         kwargs = {"model": oai_model} if oai_model else {}
         if oai_key is not None:
             kwargs["api_key"] = oai_key
+        import logging
+        logging.getLogger("paios.api").warning(f"[DIAGNOSTIC] Instantiating OpenAIAdapter with model={oai_model or 'default'}, api_key_present={bool(oai_key)}")
         providers_map["openai"] = OpenAIAdapter(**kwargs)
-    except Exception:
-        pass
+    except Exception as e:
+        import logging
+        logging.getLogger("paios.api").warning(f"[DIAGNOSTIC] OpenAI init failed: {e}")
 
     fallback_chain = []
     if provider == "gemini" and "ollama" in providers_map:
@@ -196,6 +252,12 @@ def _construct(
         log_callback=log_cb,
         fallback_chain=fallback_chain,
     )
+    import logging
+    logger = logging.getLogger("paios.api")
+    logger.warning(
+        f"[DIAGNOSTIC] Recomposition complete: active_provider_name={manager._active_provider_name}, "
+        f"active_provider={manager.get_active_provider()}, fallback_chain={manager._fallback_chain}"
+    )
     return AssistantOrchestrator(manager)
 
 
@@ -207,7 +269,9 @@ def build_orchestrator(
     """None when provider is "none" or its SDK/key is absent — callers
     fall back to the deterministic path.
     """
+    provider = resolve_provider(provider)
     model = os.environ.get("PAIOS_AI_MODEL", model or None) or None
+    model = resolve_model(provider, model)
     try:
         return _construct(provider, model, data_dir=data_dir)
     except AdapterError:
@@ -219,13 +283,18 @@ def compose_assistant(
     config_model: str | None = None,
     api_key: str | None = None,
     data_dir: str | None = None,
+    is_explicit: bool = False,
 ) -> tuple[str, AssistantOrchestrator | None, str]:
     """(provider, orchestrator-or-None, human-readable reason).
     The reason states why the assistant is (un)available in words a user
     can act on — it feeds startup logs and /assistant/status.
     """
-    provider = resolve_provider(config_provider)
-    model = os.environ.get("PAIOS_AI_MODEL", config_model or None) or None
+    provider = resolve_provider(config_provider, is_explicit=is_explicit)
+    if is_explicit:
+        model = config_model or None
+    else:
+        model = os.environ.get("PAIOS_AI_MODEL", config_model or None) or None
+    model = resolve_model(provider, model)
 
     if provider == "none":
         return (

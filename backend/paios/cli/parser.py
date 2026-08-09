@@ -103,6 +103,7 @@ _SPECS = (
         0,
         2,
     ),
+    CommandSpec("version", "version", "Show application version and build info"),
     # --- Milestone 14: Notifications -------------------------------------
     CommandSpec(
         "notifications",

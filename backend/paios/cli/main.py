@@ -153,7 +153,13 @@ def main(
         out.write(format_help(COMMAND_SPECS) + "\n")
         return 0
 
-    # --- process-bound M16 surfaces (no Application instance needed) -----
+    if arguments[0] == "version":
+        import paios
+        info = paios.get_version_info()
+        out.write(f"PAIOS version: {info['version']}\n")
+        out.write(f"Build: {info['build']}\n")
+        out.write(f"Git Commit: {info['commit']}\n")
+        return 0
 
     if arguments[0] == "init":
         return _run_init(system, out)

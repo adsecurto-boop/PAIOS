@@ -129,3 +129,33 @@ class TestApplyMode:
                 page.mode_combo.setCurrentIndex(index)
                 break
         assert page.key_row.isHidden()
+
+    def test_gemini_model_dropdown_preservation(self, window, page):
+        # Select "Google Gemini"
+        for index in range(page.mode_combo.count()):
+            if page.mode_combo.itemText(index) == "Google Gemini":
+                page.mode_combo.setCurrentIndex(index)
+                break
+        # Key row is visible, model row is visible
+        assert not page.key_row.isHidden()
+        assert not page.model_row.isHidden()
+        
+        # Check that Gemini models are in the combo box
+        items = [page.model_combo.itemText(i) for i in range(page.model_combo.count())]
+        assert "gemini-2.5-flash" in items
+        
+        # Select gemini-2.5-flash
+        idx = page.model_combo.findData("gemini-2.5-flash")
+        page.model_combo.setCurrentIndex(idx)
+        
+        # Enter a fake key and apply mode
+        page.key_edit.setText("AIzaFakeKey")
+        page._on_apply_mode()
+        
+        # Refresh the page (which simulates backend poll, including _populate_models)
+        page.refresh(window.client, force=True)
+        
+        # Verify that gemini-2.5-flash is still in the dropdown and selected, not overwritten by Ollama models
+        items_after = [page.model_combo.itemText(i) for i in range(page.model_combo.count())]
+        assert "gemini-2.5-flash" in items_after
+        assert page.model_combo.currentData() == "gemini-2.5-flash"

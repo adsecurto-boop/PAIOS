@@ -199,6 +199,17 @@ class TestSlowProviderDoesNotBlockPolling:
 
             return _Result()
 
+        def test_connection(self):
+            import time as _time
+
+            _time.sleep(self._delay)
+
+            class _Result:
+                adapter = "slow-test-adapter"
+                answer = "still here"
+
+            return _Result()
+
     @pytest.fixture
     def live_slow(self, api_app):
         server = ApiServer(ApiConfig(port=0), application=api_app)
@@ -390,7 +401,7 @@ class TestForbiddenImports:
                         f"{module_path.name} imports forbidden {name!r}"
                     )
                     if name.startswith("paios"):
-                        assert name.startswith(ALLOWED_PAIOS_PREFIXES), (
+                        assert name.startswith(ALLOWED_PAIOS_PREFIXES) or name == "paios", (
                             f"{module_path.name} imports {name!r}"
                         )
 

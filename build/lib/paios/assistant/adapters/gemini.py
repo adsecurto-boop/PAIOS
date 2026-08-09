@@ -51,6 +51,12 @@ class GeminiProvider(AIProvider):
         )
         if not self._api_key:
             raise AdapterUnavailableError(f"{API_KEY_VARIABLE} is not set")
+        # Debug log key status safely
+        import logging
+        logger = logging.getLogger("paios.api")
+        key_status = "present" if self._api_key else "missing"
+        key_len = len(self._api_key) if self._api_key else 0
+        logger.warning(f"[DEBUG] GeminiProvider init: model={self._model}, api_key is {key_status} (length={key_len})")
         self._last_prompt_tokens = 0
         self._last_completion_tokens = 0
 
@@ -91,10 +97,18 @@ class GeminiProvider(AIProvider):
             )
 
     def complete(self, request) -> str:
+        import logging
+        logger = logging.getLogger("paios.api")
+        key_status = "present" if self._api_key else "missing"
+        key_len = len(self._api_key) if self._api_key else 0
+        logger.warning(
+            f"[DIAGNOSTIC] GeminiProvider complete: testing model={self._model}, api_key is {key_status} (length={key_len})"
+        )
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self._model}:generateContent"
         )
+        logger.warning(f"[DIAGNOSTIC] Gemini API request stage: preparing request to endpoint={url}")
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": self._api_key,
@@ -111,13 +125,17 @@ class GeminiProvider(AIProvider):
             ],
         }
         try:
+            logger.warning(f"[DIAGNOSTIC] Gemini API request stage: sending request to {url}")
             reply = self._transport(url, payload, headers, self._timeout)
+            logger.warning(f"[DIAGNOSTIC] Gemini API response status: 200 OK")
         except urllib.error.HTTPError as error:
+            logger.warning(f"[DIAGNOSTIC] Gemini API request failed: HTTP status={error.code}")
             detail = ""
             try:
                 detail = error.read().decode("utf-8", "replace")[:300]
             except Exception:
                 pass
+            logger.warning(f"[DIAGNOSTIC] Gemini API error body: {detail}")
             msg = f"Gemini request failed ({error.code}): {detail}"
             if error.code in (401, 403):
                 msg = "Invalid API Key"
@@ -127,6 +145,9 @@ class GeminiProvider(AIProvider):
                 msg = "Model unavailable"
             raise AdapterError(msg) from error
         except Exception as error:
+            import traceback
+            logger.warning(f"[DIAGNOSTIC] Gemini API request failed with exception={type(error).__name__}: {error}")
+            logger.warning(f"[DIAGNOSTIC] Gemini API traceback: {traceback.format_exc()}")
             raise AdapterError(f"Gemini request failed: {error}") from error
 
         try:

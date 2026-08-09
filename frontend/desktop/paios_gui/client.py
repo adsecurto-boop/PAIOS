@@ -139,6 +139,9 @@ class ApiClient:
     def get_status(self) -> dict:
         return self._request("GET", "/status")
 
+    def get_version(self) -> dict:
+        return self._request("GET", "/system/version")
+
     def get_dashboard(self) -> dict:
         return self._request("GET", "/dashboard")
 

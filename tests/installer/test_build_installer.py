@@ -151,7 +151,7 @@ class TestReleaseArtifacts:
 
     def test_project_version_reads_pyproject(self):
         version = build_installer.project_version()
-        assert version == "2.4.0"
+        assert version.startswith("2.4.0.")
 
     def test_checksums_file_in_sha256sum_format(self, tmp_path):
         artifact = tmp_path / "PAIOSSetup.exe"

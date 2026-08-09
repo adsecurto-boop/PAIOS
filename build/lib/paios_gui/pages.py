@@ -575,10 +575,18 @@ class SettingsPage(QWidget):
 
         self.server_label = QLabel(f"Server: {window.client.base_url}")
         layout.addWidget(self.server_label)
+        self.version_label = QLabel("PAIOS — Checking version…")
+        self.version_label.setObjectName("versionLabel")
+        layout.addWidget(self.version_label)
         shortcuts_button = QPushButton("Keyboard shortcuts (F1)…")
         shortcuts_button.clicked.connect(window.show_shortcuts)
         layout.addWidget(shortcuts_button)
         layout.addStretch(1)
 
     def refresh(self, client) -> None:
-        """Settings shows configuration, not server data."""
+        try:
+            info = client.get_version()
+            commit_str = f" ({info['commit']})" if info.get('commit') and info['commit'] != "unknown" else ""
+            self.version_label.setText(f"PAIOS {info['version']} • Build {info['build']}{commit_str}")
+        except Exception:
+            self.version_label.setText("PAIOS — Connection offline")

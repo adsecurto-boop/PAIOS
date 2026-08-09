@@ -886,8 +886,8 @@ def test_gemini_fallback_with_missing_dpapi(api_app, tmp_path, monkeypatch):
     assert "gemini adapter ready" in restored_reason.lower()
 
 def test_assistant_config_endpoints_warnings_on_non_windows(api_app, tmp_path, monkeypatch):
-    # Mock os.name to be non-Windows ("posix") and mock key protection to fail
-    monkeypatch.setattr("os.name", "posix")
+    # Mock is_windows to return False and mock key protection to fail
+    monkeypatch.setattr("paios.api.ai_settings.is_windows", lambda: False)
     monkeypatch.setattr("paios.api.ai_settings.protect_key", lambda x: None)
     monkeypatch.setattr("paios.api.ai_settings.unprotect_key", lambda x: None)
 

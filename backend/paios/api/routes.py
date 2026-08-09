@@ -186,6 +186,10 @@ class ApiRouter:
             raise ApiError(404, "No snapshot available")
         return 200, snapshot
 
+    def _get_system_version(self, params, body):
+        import paios
+        return 200, paios.get_version_info()
+
     def _post_tick(self, params, body):
         result = serialization.serialize_decision_result(self._app.tick())
         # M20 additive field: due recurrence rules expand into proposed
@@ -556,7 +560,7 @@ class ApiRouter:
                 caps = mgr.get_capabilities()
         payload = {
             "provider": self._assistant_provider,
-            "model": stored.get("model"),
+            "model": assistant_support.resolve_model(self._assistant_provider, stored.get("model")),
             "providers": list(assistant_support.PROVIDERS),
             "stored_keys": {
                 provider: ai_settings.has_stored_key(ai_dir, provider)
@@ -567,7 +571,7 @@ class ApiRouter:
             "reason": self._assistant_reason,
             "capabilities": caps,
         }
-        if os.name != "nt":
+        if not ai_settings.is_windows():
             prov = stored.get("provider") or self._assistant_provider
             if prov in ai_settings.KEY_VARIABLES:
                 env_var = ai_settings.KEY_VARIABLES[prov]
@@ -592,7 +596,17 @@ class ApiRouter:
                 + ", ".join(assistant_support.PROVIDERS),
             )
         model = schemas.optional_string(body, "model")
+        # Enforce consistency before saving or composing
+        model = assistant_support.resolve_model(provider, model)
         api_key = schemas.optional_string(body, "api_key")
+        
+        import logging
+        logger = logging.getLogger("paios.api")
+        logger.warning(
+            f"[DIAGNOSTIC] Apply config: selected_provider={provider}, "
+            f"selected_model={model}, api_key_present={bool(api_key)}"
+        )
+        
         key_warning = None
         if api_key:
             if provider not in ai_settings.KEY_VARIABLES:
@@ -609,13 +623,19 @@ class ApiRouter:
                     " stored."
                 )
         ai_settings.save(ai_dir, {"provider": provider, "model": model})
+        stored = ai_settings.load(ai_dir)
+        key_persisted = ai_settings.has_stored_key(ai_dir, provider)
+        logger.warning(
+            f"[DIAGNOSTIC] Config saved: persisted_provider={stored.get('provider')}, "
+            f"persisted_model={stored.get('model')}, api_key_persisted={key_persisted}"
+        )
         stored_key = ai_settings.api_key_for(ai_dir, provider) or api_key
         (
             self._assistant_provider,
             self._assistant,
             self._assistant_reason,
         ) = assistant_support.compose_assistant(
-            provider, model, api_key=stored_key, data_dir=ai_dir
+            provider, model, api_key=stored_key, data_dir=ai_dir, is_explicit=True
         )
         caps = {}
         if self._assistant:
@@ -738,6 +758,11 @@ class ApiRouter:
             self._app, self._require_planning(), check_in, self._today()
         )
         if self._assistant is None:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: no active assistant composed. "
+                f"Selected provider is {self._assistant_provider}."
+            )
             return 200, fallback
         try:
             check_in_text = "; ".join(
@@ -751,7 +776,13 @@ class ApiRouter:
                 snapshot=self._app.snapshot(),
                 goals=self._app.list_goals(),
             )
-        except assistant_support.FALLBACK_ERRORS:
+        except assistant_support.FALLBACK_ERRORS as error:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: assistant call failed. "
+                f"Exception: {type(error).__name__}: {error}. "
+                f"Occurred after active provider {self._assistant_provider} was attempted."
+            )
             return 200, fallback
         return 200, {
             "source": "llm",
@@ -773,6 +804,11 @@ class ApiRouter:
             self._app, check_in, self._today()
         )
         if self._assistant is None:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: no active assistant composed. "
+                f"Selected provider is {self._assistant_provider}."
+            )
             return 200, fallback
         try:
             today_lines = [
@@ -788,7 +824,13 @@ class ApiRouter:
                 today_lines,
                 snapshot=self._app.snapshot(),
             )
-        except assistant_support.FALLBACK_ERRORS:
+        except assistant_support.FALLBACK_ERRORS as error:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: assistant call failed. "
+                f"Exception: {type(error).__name__}: {error}. "
+                f"Occurred after active provider {self._assistant_provider} was attempted."
+            )
             return 200, fallback
         return 200, {
             "source": "llm",
@@ -811,6 +853,11 @@ class ApiRouter:
             self._app, week_days
         )
         if self._assistant is None:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: no active assistant composed. "
+                f"Selected provider is {self._assistant_provider}."
+            )
             return 200, fallback
         try:
             result = self._assistant.summarize_week(
@@ -818,7 +865,13 @@ class ApiRouter:
                 goals=self._app.list_goals(),
                 projects=self._app.list_projects(),
             )
-        except assistant_support.FALLBACK_ERRORS:
+        except assistant_support.FALLBACK_ERRORS as error:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: assistant call failed. "
+                f"Exception: {type(error).__name__}: {error}. "
+                f"Occurred after active provider {self._assistant_provider} was attempted."
+            )
             return 200, fallback
         return 200, {
             "source": "llm",
@@ -961,6 +1014,11 @@ class ApiRouter:
         self._require_device()
         question = schemas.require_string(body, "text")
         if self._assistant is None:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: no active assistant composed. "
+                f"Selected provider is {self._assistant_provider}."
+            )
             return 200, {
                 "source": "heuristic",
                 "answer": (
@@ -981,6 +1039,12 @@ class ApiRouter:
                 events=self._app.list_events(),
             )
         except assistant_support.FALLBACK_ERRORS as error:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: assistant call failed. "
+                f"Exception: {type(error).__name__}: {error}. "
+                f"Occurred after active provider {self._assistant_provider} was attempted."
+            )
             return 200, {
                 "source": "heuristic",
                 "answer": f"The AI provider did not answer ({error})."
@@ -1016,8 +1080,19 @@ class ApiRouter:
                     existing_events=events,
                 )
                 return 200, assistant_support.proposal_payload(proposal)
-            except assistant_support.FALLBACK_ERRORS:
-                pass  # deterministic path answers instead
+            except assistant_support.FALLBACK_ERRORS as error:
+                import logging
+                logging.getLogger("paios.api").warning(
+                    f"[DIAGNOSTIC] Deterministic response path selected: assistant call failed. "
+                    f"Exception: {type(error).__name__}: {error}. "
+                    f"Occurred after active provider {self._assistant_provider} was attempted."
+                )
+        else:
+            import logging
+            logging.getLogger("paios.api").warning(
+                f"[DIAGNOSTIC] Deterministic response path selected: no active assistant composed. "
+                f"Selected provider is {self._assistant_provider}."
+            )
         return 200, assistant_support.heuristic_proposal_payload(
             text, goals, projects, events
         )
@@ -1620,6 +1695,7 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
     ("GET", ("system", "discovery"), ApiRouter._get_system_discovery),
     ("GET", ("system", "relay"), ApiRouter._get_system_relay),
     ("PUT", ("system", "relay"), ApiRouter._put_system_relay),
+    ("GET", ("system", "version"), ApiRouter._get_system_version),
 )
 
 
@@ -1636,6 +1712,7 @@ _ROUTES: tuple[tuple[str, tuple[str, ...], object], ...] = (
 #: same one-request-at-a-time world they were written for.
 CONCURRENT_PATHS: frozenset[tuple[str, ...]] = frozenset(
     {
+        ("system", "version"),
         ("assistant", "test"),
         ("assistant", "setup"),
         ("assistant", "providers"),

@@ -243,12 +243,32 @@ def iscc_command(
 
 
 def project_version() -> str:
-    """The single source of truth: [project] version in pyproject.toml."""
-    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    if match is None:
-        raise ValueError("pyproject.toml has no [project] version")
-    return match.group(1)
+    """The single source of truth: read version and build from paios/__init__.py."""
+    init_file = REPO_ROOT / "backend" / "paios" / "__init__.py"
+    text = init_file.read_text(encoding="utf-8")
+    version_match = re.search(r'^__version__\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    build_match = re.search(r'^__build__\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if not version_match or not build_match:
+        raise ValueError("paios/__init__.py has no version/build info")
+    version = version_match.group(1)
+    build = build_match.group(1)
+    
+    # Write the Git commit hash to backend/paios/git_commit.txt at build time
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit = result.stdout.strip()
+    except Exception:
+        commit = "unknown"
+    
+    commit_file = REPO_ROOT / "backend" / "paios" / "git_commit.txt"
+    commit_file.write_text(commit, encoding="utf-8")
+    
+    return f"{version}.{build}"
 
 
 def version_resource_text(version: str) -> str:
