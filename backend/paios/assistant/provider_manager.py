@@ -127,6 +127,7 @@ class ProviderManager(LlmAdapter):
                     try:
                         if fallback_name == "ollama" and hasattr(fallback_provider, "_model"):
                             from paios.assistant.adapters.ollama import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL
+                            # Strictly reset Ollama fallback model to prevent cloud model leakage
                             fallback_provider._model = OLLAMA_DEFAULT_MODEL
                         reply = fallback_provider.complete(request)
                         prompt_tokens = getattr(fallback_provider, "_last_prompt_tokens", 0)
@@ -199,6 +200,7 @@ class ProviderManager(LlmAdapter):
                     try:
                         if fallback_name == "ollama" and hasattr(fallback_provider, "_model"):
                             from paios.assistant.adapters.ollama import DEFAULT_MODEL as OLLAMA_DEFAULT_MODEL
+                            # Strictly reset Ollama fallback model to prevent cloud model leakage
                             fallback_provider._model = OLLAMA_DEFAULT_MODEL
                         reply = fallback_provider.complete(request)
                         prompt_tokens = getattr(fallback_provider, "_last_prompt_tokens", 0)
