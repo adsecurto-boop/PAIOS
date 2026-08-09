@@ -137,14 +137,34 @@ class JsonRepository(Repository[E, I], Generic[E, I]):
         )
 
     def find_by(self, **criteria: object) -> "list[E]":
-        return [
-            entity
-            for entity in self.list()
-            if all(
-                getattr(entity, attribute) == value
-                for attribute, value in criteria.items()
-            )
-        ]
+        from datetime import datetime
+        from enum import Enum
+        from paios.domain.value_objects.identifiers import Identifier
+
+        # Pre-normalize criteria to JSON-compatible forms
+        normalized = {}
+        for k, v in criteria.items():
+            if isinstance(v, Identifier):
+                normalized[k] = v.value
+            elif isinstance(v, Enum):
+                normalized[k] = v.value
+            elif isinstance(v, datetime):
+                normalized[k] = v.isoformat()
+            else:
+                normalized[k] = v
+
+        results = []
+        for record in self._records():
+            # If the key is in the record, it MUST match the normalized criteria.
+            # If the key is not in the record, we don't rule it out yet (we will check it post-deserialization).
+            if all(record[k] == normalized[k] for k in criteria if k in record):
+                entity = type(self)._deserialize(record)
+                if all(
+                    getattr(entity, attribute) == value
+                    for attribute, value in criteria.items()
+                ):
+                    results.append(entity)
+        return results
 
 
 class UserJsonRepository(JsonRepository, UserRepository):
